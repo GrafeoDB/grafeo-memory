@@ -6,13 +6,16 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  UV_NO_SOURCES: "1"
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv sync --no-sources
+      - run: uv sync
       - run: uv run ruff check .
       - run: uv run ruff format --check .
 
@@ -21,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv sync --no-sources
+      - run: uv sync
       - run: uv run ty check
 
   test:
@@ -35,7 +38,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --no-sources
+      - run: uv sync
       - run: uv run pytest -v
 
   coverage:
@@ -44,7 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv sync --no-sources
+      - run: uv sync
       - name: Generate coverage report
         run: uv run pytest --cov=grafeo_memory --cov-report=xml:coverage.xml
       - name: Upload coverage to Codecov
