@@ -114,8 +114,12 @@ def hybrid_search(
             db, embedder, query, user_id=user_id, k=k, filters=filters, vector_property=vector_property
         )
 
+    # Re-rank by cosine similarity: hybrid finds candidates, vector ranks them.
+    # This eliminates BM25 noise from short memories with repeated entity names.
+    from .graph import _cosine_similarity
+
     search_results: list[SearchResult] = []
-    for node_id, score in results:
+    for node_id, _fused_score in results:
         node = db.get_node(node_id)
         if node is None:
             continue
@@ -124,11 +128,17 @@ def hybrid_search(
         if not _matches_filters(props, all_filters):
             continue
         relations = _get_node_relations(db, node_id)
+        # Use cosine similarity against the stored embedding for ranking
+        stored_emb = props.get(vector_property)
+        if stored_emb is not None:
+            score = max(0.0, _cosine_similarity(query_embedding, stored_emb))
+        else:
+            score = max(0.0, 1.0 - _fused_score) if _fused_score < 1.0 else 0.5
         search_results.append(
             SearchResult(
                 memory_id=str(node_id),
                 text=props.get("text", ""),
-                score=float(score),
+                score=score,
                 user_id=user_id,
                 metadata=_parse_metadata(props.get("metadata")),
                 relations=relations if relations else None,
@@ -138,6 +148,7 @@ def hybrid_search(
             )
         )
 
+    search_results.sort(key=lambda r: r.score, reverse=True)
     return search_results
 
 

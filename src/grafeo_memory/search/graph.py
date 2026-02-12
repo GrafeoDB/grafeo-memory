@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 from collections.abc import Callable
@@ -14,13 +15,14 @@ from .vector import _get_node_relations, _get_props
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from ..embedding import EmbeddingClient
     from pydantic_ai.usage import RunUsage
+
+    from ..embedding import EmbeddingClient
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(x * x for x in b))
     if norm_a == 0 or norm_b == 0:
@@ -34,7 +36,7 @@ def graph_search(
     query: str,
     *,
     user_id: str,
-    embedder: "EmbeddingClient | None" = None,
+    embedder: EmbeddingClient | None = None,
     k: int = 20,
     vector_property: str = "embedding",
     _on_usage: Callable[[str, RunUsage], None] | None = None,
@@ -75,10 +77,8 @@ def graph_search(
 
         # Also try case-insensitive match
         if not node_ids:
-            try:
+            with contextlib.suppress(Exception):
                 node_ids = db.find_nodes_by_property("name", entity.name.lower())
-            except Exception:
-                pass
 
         for entity_nid in node_ids:
             node = db.get_node(entity_nid)

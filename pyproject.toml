@@ -52,6 +52,7 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 # ── Ty ────────────────────────────────────────────────────────────────
 [tool.ty.environment]
 python-version = "3.12"
+extra-paths = ["tests"]
 
 # ── Pytest ────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
