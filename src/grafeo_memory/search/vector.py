@@ -76,14 +76,14 @@ def hybrid_search(
     text_property: str = "text",
     fusion: str | None = None,
 ) -> list[SearchResult]:
-    """Search memories using hybrid BM25 + vector search with weighted fusion.
+    """Search memories using hybrid BM25 + vector search with RRF fusion.
 
     Falls back to vector-only search if hybrid_search is not available on the db.
     Filters are applied post-hoc on node properties since the db hybrid_search
     may not support native filtering.
 
-    Default fusion is ``"weighted"`` with 70% vector / 30% text, producing
-    scores in [0, 1].  Pass ``fusion="rrf"`` to use Reciprocal Rank Fusion.
+    Default fusion is RRF with k=1, tuned for small memory collections
+    (10-100 memories) where score differentiation matters.
     """
     if not hasattr(db, "hybrid_search"):
         return vector_search(
@@ -97,9 +97,6 @@ def hybrid_search(
     if filters:
         all_filters.update(filters)
 
-    effective_fusion = fusion or "weighted"
-    effective_weights = [0.3, 0.7] if effective_fusion == "weighted" else None
-
     try:
         results = db.hybrid_search(
             MEMORY_LABEL,
@@ -108,8 +105,8 @@ def hybrid_search(
             query,
             k,
             query_vector=query_embedding,
-            fusion=effective_fusion,
-            weights=effective_weights,
+            fusion=fusion or "rrf",
+            rrf_k=1,
         )
     except Exception:
         logger.warning("hybrid_search failed, falling back to vector_search", exc_info=True)
@@ -167,7 +164,7 @@ def search_similar(
 
     for emb in embeddings:
         try:
-            hits = db.vector_search(MEMORY_LABEL, vector_property, emb, 5, filters=search_filters)
+            hits = db.vector_search(MEMORY_LABEL, vector_property, emb, 10, filters=search_filters)
         except Exception:
             logger.warning("search_similar: vector_search failed for embedding", exc_info=True)
             continue
