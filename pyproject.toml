@@ -54,6 +54,17 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 python-version = "3.12"
 extra-paths = ["tests"]
 
+# Downgrade rules that produce false positives from Rust-extension deps
+# without type stubs (grafeo) and duck-typed `object` parameters.
+[tool.ty.rules]
+unresolved-attribute = "warn"
+invalid-argument-type = "warn"
+no-matching-overload = "warn"
+invalid-return-type = "warn"
+call-non-callable = "warn"
+call-top-callable = "warn"
+invalid-assignment = "warn"
+
 # ── Pytest ────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
 testpaths = ["tests"]

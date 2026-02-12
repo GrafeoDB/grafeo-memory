@@ -30,16 +30,20 @@ def main():
     with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
         # --- Add a multimodal message ---
         print("Adding a multimodal message with text + image:")
-        events = memory.add({
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Here's a photo from the team offsite"},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/PNG_transparency_demonstration_1.png/280px-PNG_transparency_demonstration_1.png"},
-                },
-            ],
-        })
+        events = memory.add(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Here's a photo from the team offsite"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/PNG_transparency_demonstration_1.png/280px-PNG_transparency_demonstration_1.png"
+                        },
+                    },
+                ],
+            }
+        )
         for e in events:
             print(f"  [{e.action.value.upper()}] {e.text}")
 
