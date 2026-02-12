@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  UV_NO_SOURCES: "1"
-
 jobs:
   lint:
     runs-on: ubuntu-latest

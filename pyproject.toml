@@ -91,5 +91,3 @@ dev-dependencies = [
     "ty>=0.0.16",
 ]
 
-[tool.uv.sources]
-grafeo = { path = "../grafeo/crates/bindings/python", editable = true }
