@@ -55,8 +55,10 @@ python-version = "3.12"
 extra-paths = ["tests"]
 
 # Downgrade rules that produce false positives from Rust-extension deps
-# without type stubs (grafeo) and duck-typed `object` parameters.
+# without type stubs (grafeo), duck-typed `object` parameters, and
+# optional dependencies (openai, mistralai) not installed in CI.
 [tool.ty.rules]
+unresolved-import = "warn"
 unresolved-attribute = "warn"
 invalid-argument-type = "warn"
 no-matching-overload = "warn"
