@@ -1,0 +1,83 @@
+[project]
+name = "grafeo-memory"
+version = "0.1.0"
+description = "AI memory layer powered by GrafeoDB's hybrid graph and vector database"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+authors = [{ name = "S.T. Grond" }]
+keywords = ["memory", "ai", "graph", "database", "llm", "rag", "knowledge-graph"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "grafeo>=0.5.1",
+    "pydantic-ai-slim",
+]
+
+[project.optional-dependencies]
+openai = ["pydantic-ai-slim[openai]", "openai>=1.0"]
+anthropic = ["pydantic-ai-slim[anthropic]"]
+google = ["pydantic-ai-slim[google]"]
+groq = ["pydantic-ai-slim[groq]"]
+mistral = ["pydantic-ai-slim[mistral]", "mistralai>=1.0"]
+all = ["pydantic-ai-slim[openai,anthropic,google,groq,mistral]", "openai>=1.0", "mistralai>=1.0"]
+
+[project.scripts]
+grafeo-memory = "grafeo_memory.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/GrafeoDB/grafeo-memory"
+Repository = "https://github.com/GrafeoDB/grafeo-memory"
+Issues = "https://github.com/GrafeoDB/grafeo-memory/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/grafeo_memory"]
+
+# ── Ruff ──────────────────────────────────────────────────────────────
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+# ── Ty ────────────────────────────────────────────────────────────────
+[tool.ty.environment]
+python-version = "3.12"
+
+# ── Pytest ────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=grafeo_memory --cov-report=term-missing"
+
+# ── Coverage ─────────────────────────────────────────────────────────
+[tool.coverage.run]
+source = ["grafeo_memory"]
+omit = ["*/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+
+# ── UV ────────────────────────────────────────────────────────────────
+[tool.uv]
+dev-dependencies = [
+    "pytest>=9",
+    "pytest-cov>=7",
+    "ruff>=0.15",
+    "ty>=0.0.16",
+]
+
+[tool.uv.sources]
+grafeo = { path = "../grafeo/crates/bindings/python", editable = true }
