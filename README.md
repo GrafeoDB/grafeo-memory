@@ -188,10 +188,10 @@ memory = MemoryManager("openai:gpt-4o-mini", config, embedder=MyEmbedder())
 
 grafeo-memory is part of the GrafeoDB ecosystem:
 
-- **[grafeo](https://github.com/GrafeoDB/grafeo)** &mdash; Core graph database engine (Rust)
-- **[grafeo-langchain](https://github.com/GrafeoDB/grafeo-langchain)** &mdash; LangChain integration
-- **[grafeo-llamaindex](https://github.com/GrafeoDB/grafeo-llamaindex)** &mdash; LlamaIndex integration
-- **[grafeo-mcp](https://github.com/GrafeoDB/grafeo-mcp)** &mdash; MCP server for AI agents
+- **[grafeo](https://github.com/GrafeoDB/grafeo)**: Core graph database engine (Rust)
+- **[grafeo-langchain](https://github.com/GrafeoDB/grafeo-langchain)**: LangChain integration
+- **[grafeo-llamaindex](https://github.com/GrafeoDB/grafeo-llamaindex)**: LlamaIndex integration
+- **[grafeo-mcp](https://github.com/GrafeoDB/grafeo-mcp)**: MCP server for AI agents
 
 All packages share the same `.db` file. Build memories with grafeo-memory, query them with grafeo-langchain, expose them via grafeo-mcp.
 
