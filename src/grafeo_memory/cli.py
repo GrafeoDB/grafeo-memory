@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 from dataclasses import asdict
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ def _create_manager(args: argparse.Namespace):
     from .manager import MemoryManager
     from .types import MemoryConfig
 
-    model = _resolve(args.model, "GRAFEO_MEMORY_MODEL", "openai:gpt-4o-mini")
+    model = _resolve(args.model, "GRAFEO_MEMORY_MODEL", "openai:gpt-4o-mini") or "openai:gpt-4o-mini"
     db_path = _resolve(args.db, "GRAFEO_MEMORY_DB")
     user_id = _resolve(args.user, "GRAFEO_MEMORY_USER", "default") or "default"
 
@@ -120,7 +121,7 @@ def _create_manager(args: argparse.Namespace):
 # --- Output helpers ---
 
 
-def _serialize(obj: object) -> dict:
+def _serialize(obj: Any) -> dict:
     """Convert a dataclass to a JSON-friendly dict, resolving Enums to their values."""
     from enum import Enum
 

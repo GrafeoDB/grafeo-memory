@@ -26,14 +26,18 @@ def main():
         # --- Add (fires extract_facts + extract_entities callbacks) ---
         print("Adding memory (watching LLM calls):")
         result = memory.add("Alice is a data scientist at Acme Corp who loves hiking")
-        print(f"  Total: {result.usage.input_tokens} in, {result.usage.output_tokens} out, "
-              f"{result.usage.requests} requests\n")
+        print(
+            f"  Total: {result.usage.input_tokens} in, {result.usage.output_tokens} out, "
+            f"{result.usage.requests} requests\n"
+        )
 
         # --- Search (fires extract_entities for graph search) ---
         print("Searching (watching LLM calls):")
         search = memory.search("What does Alice do?")
-        print(f"  Total: {search.usage.input_tokens} in, {search.usage.output_tokens} out, "
-              f"{search.usage.requests} requests")
+        print(
+            f"  Total: {search.usage.input_tokens} in, {search.usage.output_tokens} out, "
+            f"{search.usage.requests} requests"
+        )
 
         print(f"\nFound {len(search)} results:")
         for r in search:

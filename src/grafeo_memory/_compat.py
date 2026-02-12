@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
+from collections.abc import Coroutine
 from concurrent.futures import ThreadPoolExecutor
-from typing import TypeVar
-
-T = TypeVar("T")
+from typing import Any
 
 # --- Windows ProactorEventLoop safety net ---
 # Python 3.13+ incremental GC can trigger httpx transport __del__ after the
@@ -19,11 +19,9 @@ if sys.platform == "win32":
 
         _original_del = _ProactorBasePipeTransport.__del__
 
-        def _safe_del(self, _warn=None):  # type: ignore[no-untyped-def]
-            try:
-                _original_del(self, _warn)
-            except RuntimeError:
-                pass
+        def _safe_del(self, _warn: object = None) -> None:
+            with contextlib.suppress(RuntimeError):
+                _original_del(self, _warn)  # type: ignore[too-many-positional-arguments]
 
         _ProactorBasePipeTransport.__del__ = _safe_del  # type: ignore[assignment]
     except (ImportError, AttributeError):
@@ -42,7 +40,7 @@ def _get_runner() -> asyncio.Runner:
     return _runner
 
 
-def run_sync(coro: object) -> object:
+def run_sync[T](coro: Coroutine[Any, Any, T]) -> T:
     """Run an async coroutine synchronously.
 
     If no event loop is running, uses a persistent asyncio.Runner to keep the

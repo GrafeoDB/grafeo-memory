@@ -6,7 +6,8 @@ import json
 import logging
 import time
 
-from ._compat import run_sync, shutdown as _shutdown_runner
+from ._compat import run_sync
+from ._compat import shutdown as _shutdown_runner
 from .embedding import EmbeddingClient
 from .extraction import extract_async
 from .history import HistoryEntry, get_history, record_history
