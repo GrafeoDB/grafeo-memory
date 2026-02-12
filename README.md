@@ -5,7 +5,7 @@
 
 # grafeo-memory
 
-AI memory layer powered by [GrafeoDB](https://github.com/GrafeoDB/grafeo) &mdash; an embedded graph database with native vector search.
+AI memory layer powered by [GrafeoDB](https://github.com/GrafeoDB/grafeo), an embedded graph database with native vector search.
 
 No servers, no Docker, no Neo4j, no Qdrant. One `.db` file + one LLM.
 
