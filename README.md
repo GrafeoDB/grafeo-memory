@@ -57,7 +57,7 @@ with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
 
 ## How It Works
 
-grafeo-memory implements the **reconciliation loop** &mdash; the intelligence layer that decides what to remember:
+grafeo-memory implements the **reconciliation loop**, the intelligence layer that decides what to remember:
 
 1. **Extract** facts from conversation text (LLM call)
 2. **Extract** entities and relationships (LLM tool call)
@@ -143,7 +143,7 @@ memory = MemoryManager("openai:gpt-4o-mini", config, embedder=MyEmbedder())
 | | Traditional stack | grafeo-memory |
 |---|---|---|
 | Infrastructure | Neo4j + Qdrant (Docker) | **Single .db file** |
-| Install size | ~750MB (Docker images) | **~16MB** (pip install) |
+| Install size | ~750MB (Docker images) | **~16MB** (uv add) |
 | Offline/edge | Requires servers | **Yes** |
 | Graph + vector | Separate services | **Unified engine** |
 | LLM providers | Varies | **pydantic-ai** (OpenAI, Anthropic, Mistral, Groq, Google) |
@@ -153,45 +153,45 @@ memory = MemoryManager("openai:gpt-4o-mini", config, embedder=MyEmbedder())
 
 ### `MemoryManager`
 
-- `MemoryManager(model, config=None, *, embedder)` &mdash; create memory manager. `model` is a pydantic-ai model string (e.g. `"openai:gpt-4o-mini"`)
-- `.add(text, user_id=None, session_id=None, metadata=None)` &mdash; extract and store memories
-- `.search(query, user_id=None, k=10)` &mdash; semantic + graph search
-- `.get_all(user_id=None)` &mdash; retrieve all memories for a user
-- `.delete(memory_id)` &mdash; delete a specific memory
-- `.delete_all(user_id=None)` &mdash; delete all memories for a user
-- `.history(memory_id)` &mdash; get update history for a memory (requires CDC feature)
-- `.close()` &mdash; close the database
+- `MemoryManager(model, config=None, *, embedder)`: create memory manager. `model` is a pydantic-ai model string (e.g. `"openai:gpt-4o-mini"`)
+- `.add(text, user_id=None, session_id=None, metadata=None)`: extract and store memories
+- `.search(query, user_id=None, k=10)`: semantic + graph search
+- `.get_all(user_id=None)`: retrieve all memories for a user
+- `.delete(memory_id)`: delete a specific memory
+- `.delete_all(user_id=None)`: delete all memories for a user
+- `.history(memory_id)`: get update history for a memory (requires CDC feature)
+- `.close()`: close the database
 
 ### `MemoryConfig`
 
-- `db_path` &mdash; path to database file (None for in-memory)
-- `user_id` &mdash; default user scope (default `"default"`)
-- `session_id` &mdash; default session scope
-- `agent_id` &mdash; default agent scope
-- `similarity_threshold` &mdash; reconciliation similarity threshold (default 0.7)
-- `embedding_dimensions` &mdash; vector dimensions (default 1536)
-- `vector_property` &mdash; property name for embeddings (default `"embedding"`)
-- `text_property` &mdash; property name for text content (default `"text"`)
+- `db_path`: path to database file (None for in-memory)
+- `user_id`: default user scope (default `"default"`)
+- `session_id`: default session scope
+- `agent_id`: default agent scope
+- `similarity_threshold`: reconciliation similarity threshold (default 0.7)
+- `embedding_dimensions`: vector dimensions (default 1536)
+- `vector_property`: property name for embeddings (default `"embedding"`)
+- `text_property`: property name for text content (default `"text"`)
 
 ### `EmbeddingClient` (Protocol)
 
-- `.embed(texts: list[str]) -> list[list[float]]` &mdash; generate embeddings for a batch of texts
-- `.dimensions -> int` &mdash; return the embedding vector dimensionality
+- `.embed(texts: list[str]) -> list[list[float]]`: generate embeddings for a batch of texts
+- `.dimensions -> int`: return the embedding vector dimensionality
 
 ### Types
 
-- `MemoryAction` &mdash; enum: `ADD`, `UPDATE`, `DELETE`, `NONE`
-- `MemoryEvent` &mdash; action, memory_id, text, old_text
-- `SearchResult` &mdash; memory_id, text, score, user_id, metadata, relations
+- `MemoryAction`: enum: `ADD`, `UPDATE`, `DELETE`, `NONE`
+- `MemoryEvent`: action, memory_id, text, old_text
+- `SearchResult`: memory_id, text, score, user_id, metadata, relations
 
 ## Ecosystem
 
 grafeo-memory is part of the GrafeoDB ecosystem:
 
-- **[grafeo](https://github.com/GrafeoDB/grafeo)** &mdash; Core graph database engine (Rust)
-- **[grafeo-langchain](https://github.com/GrafeoDB/grafeo-langchain)** &mdash; LangChain integration
-- **[grafeo-llamaindex](https://github.com/GrafeoDB/grafeo-llamaindex)** &mdash; LlamaIndex integration
-- **[grafeo-mcp](https://github.com/GrafeoDB/grafeo-mcp)** &mdash; MCP server for AI agents
+- **[grafeo](https://github.com/GrafeoDB/grafeo)**: Core graph database engine (Rust)
+- **[grafeo-langchain](https://github.com/GrafeoDB/grafeo-langchain)**: LangChain integration
+- **[grafeo-llamaindex](https://github.com/GrafeoDB/grafeo-llamaindex)**: LlamaIndex integration
+- **[grafeo-mcp](https://github.com/GrafeoDB/grafeo-mcp)**: MCP server for AI agents
 
 All packages share the same `.db` file. Build memories with grafeo-memory, query them with grafeo-langchain, expose them via grafeo-mcp.
 
