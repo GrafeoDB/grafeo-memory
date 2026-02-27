@@ -64,6 +64,11 @@ class MemoryConfig:
     weight_importance: float = 0.15
     # LLM usage tracking (opt-in)
     usage_callback: Callable[[str, RunUsage], None] | None = None
+    # Topology-aware scoring (opt-in, requires enable_importance)
+    weight_topology: float = 0.0
+    # Structural decay modulation (opt-in, requires enable_importance)
+    enable_structural_decay: bool = False
+    structural_feedback_gamma: float = 0.3
     # Vision / multimodal (opt-in)
     enable_vision: bool = False
     vision_model: object | None = None

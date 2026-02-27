@@ -411,6 +411,19 @@ class _MemoryCore:
             text_property=self._config.text_property,
         )
 
+        # Extract entities asynchronously to avoid nested run_sync() deadlock
+        # when graph_search is called from within this async context.
+        from .extraction.entities import extract_entities_async
+        from .types import Fact
+
+        try:
+            entities, _ = await extract_entities_async(
+                self._model, [Fact(text=query)], uid, _on_usage=on_usage
+            )
+        except Exception:
+            logger.warning("_search: entity extraction failed for query=%r", query, exc_info=True)
+            entities = []
+
         graph_results = graph_search(
             self._db,
             self._model,
@@ -420,6 +433,7 @@ class _MemoryCore:
             k=k,
             vector_property=self._config.vector_property,
             _on_usage=on_usage,
+            _entities=entities,
         )
 
         # Post-hoc filter graph results by memory_type if specified
