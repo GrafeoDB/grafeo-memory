@@ -915,6 +915,21 @@ class _MemoryCore:
 
         to_consolidate = memory_data[:-preserve_recent] if preserve_recent > 0 else memory_data
 
+        # Topology-aware consolidation: protect well-connected memories
+        threshold = self._config.consolidation_protect_threshold
+        if threshold > 0:
+            from .scoring import _batch_topology_scores
+
+            candidate_ids = [mid for mid, _, _ in to_consolidate]
+            topo_cache = _batch_topology_scores(self._db, candidate_ids, self._config)
+            to_consolidate = [
+                (mid, text, ts)
+                for mid, text, ts in to_consolidate
+                if topo_cache.get(mid, (0.0, 0.0))[0] < threshold
+            ]
+            if not to_consolidate:
+                return AddResult(usage=total)
+
         agent = Agent(self._model, system_prompt=SUMMARIZE_SYSTEM, output_type=SummarizeOutput)
         all_events: list[MemoryEvent] = []
 

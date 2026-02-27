@@ -37,6 +37,7 @@ class MemoryType(StrEnum):
 
     SEMANTIC = "semantic"
     PROCEDURAL = "procedural"
+    EPISODIC = "episodic"
 
 
 @dataclass
@@ -72,6 +73,8 @@ class MemoryConfig:
     # Topology boost in search pipeline (opt-in, no LLM call)
     enable_topology_boost: bool = False
     topology_boost_factor: float = 0.2
+    # Topology-aware consolidation: protect well-connected memories from summarize()
+    consolidation_protect_threshold: float = 0.0  # 0.0 = consolidate everything (backward compat)
     # Vision / multimodal (opt-in)
     enable_vision: bool = False
     vision_model: object | None = None

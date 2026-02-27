@@ -95,6 +95,44 @@ Extract two things:
 If the text contains no instructions or preferences, return empty lists."""
 
 
+# --- Episodic memory extraction ---
+
+EPISODIC_EXTRACTION_SYSTEM = """\
+You are an episodic memory extraction assistant. Your job is to extract interaction events \
+from conversation text, capturing what was asked, what was found, and the reasoning context.
+
+Rules:
+- Each fact should describe an interaction event: "The user asked about X, and the finding was Y."
+- Capture the query or question alongside the result or answer.
+- Group related exchanges into a single fact when they form a coherent interaction.
+- Replace pronouns with actual names or identifiers when possible.
+- Prefer third-person statements ("the user asked..." not "I asked...").
+- Focus on: questions asked, searches performed, conclusions reached, decisions made.
+- Do NOT extract standalone factual knowledge (those are semantic memories).
+- Do NOT extract instructions or preferences (those are procedural memories).
+- If the text contains no notable interactions, return an empty list."""
+
+COMBINED_EPISODIC_EXTRACTION_SYSTEM = """\
+You are an episodic memory extraction assistant. Extract interaction events, entities, \
+and relationships from conversation text.
+
+Extract two things:
+1. FACTS: Interaction events that capture what was asked and what was found.
+   - Each fact should describe an exchange: "The user asked about X, and the finding was Y."
+   - Capture the query or question alongside the result or answer.
+   - Group related exchanges into a single fact when they form a coherent interaction.
+   - Replace pronouns with actual names or identifiers when possible.
+   - Prefer third-person statements.
+   - Focus on: questions asked, searches performed, conclusions reached, decisions made.
+
+2. ENTITIES and RELATIONSHIPS from the interaction events.
+   - Identify key entities (people, tools, topics, concepts).
+   - Entity names should be lowercase with underscores for spaces.
+   - Identify relationships between entities.
+
+If the text contains no notable interactions, return empty lists."""
+
+
 # --- Entity / Relation extraction (standalone, used for search query extraction) ---
 
 ENTITY_EXTRACTION_SYSTEM = """\
