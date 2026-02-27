@@ -88,3 +88,26 @@ def test_full_extract_error():
     assert result.facts == []
     assert result.entities == []
     assert result.relations == []
+
+
+def test_full_extract_fallback_to_separate_calls():
+    """When combined extraction fails, fall back to separate fact + entity extraction."""
+    from mock_llm import make_error_then_succeed_model
+
+    model = make_error_then_succeed_model(
+        [
+            # Call 1 (index 0) errors (combined extraction)
+            # Call 2 (index 1) → fact extraction
+            {"facts": ["alice works at acme"]},
+            # Call 3 (index 2) → entity extraction
+            {
+                "entities": [{"name": "alice", "entity_type": "person"}],
+                "relations": [],
+            },
+        ]
+    )
+    result = extract(model, "Alice works at Acme Corp", "alice")
+    assert len(result.facts) == 1
+    assert result.facts[0].text == "alice works at acme"
+    assert len(result.entities) == 1
+    assert result.entities[0].name == "alice"

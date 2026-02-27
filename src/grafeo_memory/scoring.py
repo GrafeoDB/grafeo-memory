@@ -123,6 +123,45 @@ def apply_importance_scoring(
     return scored
 
 
+def apply_topology_boost(
+    results: list[SearchResult],
+    db: object,
+    config: MemoryConfig,
+) -> list[SearchResult]:
+    """Boost search result scores based on graph-topology connectivity.
+
+    Multiplicative boost: score *= (1 + boost_factor * topology_score).
+    Well-connected memories rise in rankings. No LLM call needed.
+    """
+    if not results or config.topology_boost_factor <= 0:
+        return results
+
+    topo_cache = _batch_topology_scores(db, [r.memory_id for r in results], config)
+
+    boosted: list[SearchResult] = []
+    for r in results:
+        topo, _ = topo_cache.get(r.memory_id, (0.0, 0.0))
+        boost = 1.0 + config.topology_boost_factor * topo
+        boosted.append(
+            SearchResult(
+                memory_id=r.memory_id,
+                text=r.text,
+                score=r.score * boost,
+                user_id=r.user_id,
+                metadata=r.metadata,
+                relations=r.relations,
+                actor_id=r.actor_id,
+                role=r.role,
+                importance=r.importance,
+                access_count=r.access_count,
+                memory_type=r.memory_type,
+            )
+        )
+
+    boosted.sort(key=lambda r: r.score, reverse=True)
+    return boosted
+
+
 # ---------------------------------------------------------------------------
 # Topology scoring (VimRAG-inspired)
 # ---------------------------------------------------------------------------

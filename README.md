@@ -154,13 +154,18 @@ memory = MemoryManager("openai:gpt-4o-mini", config, embedder=MyEmbedder())
 ### `MemoryManager`
 
 - `MemoryManager(model, config=None, *, embedder)`: create memory manager. `model` is a pydantic-ai model string (e.g. `"openai:gpt-4o-mini"`)
-- `.add(text, user_id=None, session_id=None, metadata=None)`: extract and store memories
-- `.search(query, user_id=None, k=10)`: semantic + graph search
-- `.get_all(user_id=None)`: retrieve all memories for a user
-- `.delete(memory_id)`: delete a specific memory
-- `.delete_all(user_id=None)`: delete all memories for a user
-- `.history(memory_id)`: get update history for a memory (requires CDC feature)
+- `.add(messages, user_id=None, session_id=None, metadata=None, *, infer=True, importance=1.0, memory_type="semantic")` → `AddResult` (list of `MemoryEvent`)
+- `.search(query, user_id=None, k=10, *, filters=None, rerank=True, memory_type=None)` → `SearchResponse` (list of `SearchResult`)
+- `.update(memory_id, text)` → `MemoryEvent`: update a memory's text directly
+- `.get_all(user_id=None, memory_type=None)` → `list[SearchResult]`
+- `.delete(memory_id)` → `bool`
+- `.delete_all(user_id=None)` → `int` (count deleted)
+- `.summarize(user_id=None, *, preserve_recent=5, batch_size=20)` → `AddResult`
+- `.history(memory_id)` → `list[HistoryEntry]`
+- `.set_importance(memory_id, importance)` → `bool`
 - `.close()`: close the database
+
+Use as a context manager: `with MemoryManager(...) as memory:`. Multiple sessions in the same process are supported.
 
 ### `MemoryConfig`
 
@@ -168,21 +173,35 @@ memory = MemoryManager("openai:gpt-4o-mini", config, embedder=MyEmbedder())
 - `user_id`: default user scope (default `"default"`)
 - `session_id`: default session scope
 - `agent_id`: default agent scope
-- `similarity_threshold`: reconciliation similarity threshold (default 0.7)
+- `similarity_threshold`: max embedding distance for reconciliation (default 0.7)
 - `embedding_dimensions`: vector dimensions (default 1536)
-- `vector_property`: property name for embeddings (default `"embedding"`)
-- `text_property`: property name for text content (default `"text"`)
+- `enable_importance`: enable composite scoring with recency/frequency/importance (default False)
+- `weight_topology`: topology score weight for graph-connected memories (default 0.0)
 
 ### `EmbeddingClient` (Protocol)
 
 - `.embed(texts: list[str]) -> list[list[float]]`: generate embeddings for a batch of texts
 - `.dimensions -> int`: return the embedding vector dimensionality
 
-### Types
+### Return Types
 
-- `MemoryAction`: enum: `ADD`, `UPDATE`, `DELETE`, `NONE`
-- `MemoryEvent`: action, memory_id, text, old_text
-- `SearchResult`: memory_id, text, score, user_id, metadata, relations
+- **`AddResult`**: list subclass of `MemoryEvent`, with `.usage` for LLM token counts
+- **`SearchResponse`**: list subclass of `SearchResult`, with `.usage` for LLM token counts
+- **`MemoryEvent`**: `.action` (ADD/UPDATE/DELETE/NONE), `.memory_id`, `.text`, `.old_text`
+- **`SearchResult`**: `.memory_id`, `.text`, `.score`, `.user_id`, `.metadata`, `.relations`, `.memory_type`
+- **`HistoryEntry`**: `.event`, `.old_text`, `.new_text`, `.timestamp`, `.actor_id`, `.role`
+
+### Iteration
+
+```python
+# AddResult is iterable:
+for event in memory.add("text"):
+    print(event.action, event.text)
+
+# SearchResponse is iterable:
+for result in memory.search("query"):
+    print(result.text, result.score)
+```
 
 ## Ecosystem
 

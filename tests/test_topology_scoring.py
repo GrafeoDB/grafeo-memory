@@ -338,3 +338,96 @@ class TestApplyImportanceScoringWithTopology:
         # Foundational memory should score higher due to structural reinforcement
         assert scored[0].text == "foundational fact"
         assert scored[0].score > scored[1].score
+
+
+# ---------------------------------------------------------------------------
+# apply_topology_boost tests
+# ---------------------------------------------------------------------------
+
+
+class TestTopologyBoost:
+    def test_boost_disabled_via_search_pipeline(self):
+        """enable_topology_boost=False means _search() won't call apply_topology_boost.
+
+        The function itself gates on topology_boost_factor, not the flag.
+        This test verifies factor=0 is a no-op.
+        """
+        from grafeo_memory.scoring import apply_topology_boost
+
+        db, mem_ids = _make_graph(
+            [{"text": "fact A"}, {"text": "fact B"}],
+            [{"name": "ent"}],
+            [(0, 0)],
+        )
+        results = [
+            SearchResult(memory_id=mem_ids[0], text="fact A", score=0.9, user_id="test_user"),
+            SearchResult(memory_id=mem_ids[1], text="fact B", score=0.8, user_id="test_user"),
+        ]
+        config = MemoryConfig(topology_boost_factor=0.0)
+        boosted = apply_topology_boost(results, db, config)
+        assert [r.score for r in boosted] == [0.9, 0.8]
+
+    def test_boost_factor_zero_noop(self):
+        """topology_boost_factor=0 should return results unchanged."""
+        from grafeo_memory.scoring import apply_topology_boost
+
+        db, mem_ids = _make_graph(
+            [{"text": "fact A"}],
+            [{"name": "ent"}],
+            [(0, 0)],
+        )
+        results = [
+            SearchResult(memory_id=mem_ids[0], text="fact A", score=0.9, user_id="test_user"),
+        ]
+        config = MemoryConfig(enable_topology_boost=True, topology_boost_factor=0.0)
+        boosted = apply_topology_boost(results, db, config)
+        assert boosted[0].score == 0.9
+
+    def test_connected_memory_boosted(self):
+        """A memory linked to shared entities should get a higher score after boost."""
+        from grafeo_memory.scoring import apply_topology_boost
+
+        db, mem_ids = _make_graph(
+            [{"text": "connected"}, {"text": "isolated"}, {"text": "other"}],
+            [{"name": "shared_ent"}, {"name": "lone_ent"}],
+            # connected and other share an entity; isolated has its own
+            edges=[(0, 0), (2, 0), (1, 1)],
+        )
+        results = [
+            SearchResult(memory_id=mem_ids[0], text="connected", score=0.8, user_id="test_user"),
+            SearchResult(memory_id=mem_ids[1], text="isolated", score=0.8, user_id="test_user"),
+        ]
+        config = MemoryConfig(enable_topology_boost=True, topology_boost_factor=0.3)
+        boosted = apply_topology_boost(results, db, config)
+
+        # Both started at 0.8, connected one should be boosted more
+        connected = next(r for r in boosted if r.text == "connected")
+        isolated = next(r for r in boosted if r.text == "isolated")
+        assert connected.score > isolated.score
+        # Boost should never decrease (multiplicative, factor >= 1.0)
+        assert connected.score >= 0.8
+        assert isolated.score >= 0.8
+
+    def test_boost_never_decreases_scores(self):
+        """Topology boost is multiplicative (>= 1.0), so scores can only increase."""
+        from grafeo_memory.scoring import apply_topology_boost
+
+        db, mem_ids = _make_graph(
+            [{"text": "mem"}],
+            [],
+            [],
+        )
+        results = [
+            SearchResult(memory_id=mem_ids[0], text="mem", score=0.5, user_id="test_user"),
+        ]
+        config = MemoryConfig(enable_topology_boost=True, topology_boost_factor=0.5)
+        boosted = apply_topology_boost(results, db, config)
+        # No entities → topology score = 0 → boost = 1.0 → no change
+        assert boosted[0].score == 0.5
+
+    def test_boost_empty_results(self):
+        """apply_topology_boost with empty list should return empty list."""
+        from grafeo_memory.scoring import apply_topology_boost
+
+        config = MemoryConfig(enable_topology_boost=True)
+        assert apply_topology_boost([], None, config) == []

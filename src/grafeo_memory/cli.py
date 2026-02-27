@@ -223,19 +223,17 @@ def _cmd_delete(manager, args: argparse.Namespace) -> None:
 def _cmd_history(manager, args: argparse.Namespace) -> None:
     entries = manager.history(args.memory_id)
     if args.output_json:
-        _print_json({"history": entries})
+        _print_json({"history": [asdict(e) for e in entries]})
         return
     if not entries:
         print("No history.")
         return
     for entry in entries:
-        event = entry.get("event", "?")
-        ts = entry.get("timestamp", "?")
-        print(f"  [{event}] at {ts}")
-        if entry.get("old_text"):
-            print(f"    old: {entry['old_text']}")
-        if entry.get("new_text"):
-            print(f"    new: {entry['new_text']}")
+        print(f"  [{entry.event}] at {entry.timestamp}")
+        if entry.old_text:
+            print(f"    old: {entry.old_text}")
+        if entry.new_text:
+            print(f"    new: {entry.new_text}")
 
 
 def _cmd_summarize(manager, args: argparse.Namespace) -> None:

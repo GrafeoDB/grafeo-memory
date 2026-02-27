@@ -81,7 +81,7 @@ async def _extract_combined_async(
     try:
         result = await agent.run(COMBINED_EXTRACTION_USER.format(user_id=user_id, text=text))
     except Exception:
-        logger.warning("Combined extraction failed", exc_info=True)
+        logger.debug("Combined extraction failed, falling back to separate calls", exc_info=True)
         return ExtractionResult()
     if _on_usage is not None:
         _on_usage("extract", result.usage())
@@ -102,7 +102,7 @@ async def extract_async(
     memory_type: str = "semantic",
     _on_usage: Callable[[str, RunUsage], None] | None = None,
 ) -> ExtractionResult:
-    """Run extraction pipeline (async): facts + entities + relations in 1 LLM call.
+    """Run extraction pipeline (async): tries combined (1 LLM call), falls back to separate calls.
 
     For procedural memory_type, uses the procedural extraction prompt unless custom_fact_prompt is set.
     """
@@ -112,7 +112,20 @@ async def extract_async(
 
         effective_prompt = COMBINED_PROCEDURAL_EXTRACTION_SYSTEM
 
-    return await _extract_combined_async(model, text, user_id, custom_prompt=effective_prompt, _on_usage=_on_usage)
+    result = await _extract_combined_async(model, text, user_id, custom_prompt=effective_prompt, _on_usage=_on_usage)
+    if result.facts:
+        return result
+
+    # Fallback: combined extraction returned nothing (model may not support complex schema).
+    # Try separate fact extraction + entity extraction (2 simpler LLM calls).
+    from .facts import extract_facts_async
+
+    facts = await extract_facts_async(model, text, user_id, custom_prompt=effective_prompt, _on_usage=_on_usage)
+    if not facts:
+        return ExtractionResult()
+
+    entities, relations = await extract_entities_async(model, facts, user_id, _on_usage=_on_usage)
+    return ExtractionResult(facts=facts, entities=entities, relations=relations)
 
 
 def extract(

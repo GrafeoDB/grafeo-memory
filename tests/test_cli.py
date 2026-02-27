@@ -49,7 +49,9 @@ class FakeManager:
 
     def history(self, memory_id):
         self.calls.append(("history", memory_id))
-        return [{"event": "ADD", "new_text": "alice works at acme", "timestamp": 1000}]
+        from grafeo_memory.history import HistoryEntry
+
+        return [HistoryEntry(event="ADD", new_text="alice works at acme", timestamp=1000)]
 
     def summarize(self, *, preserve_recent=5, batch_size=20):
         self.calls.append(("summarize", preserve_recent, batch_size))
@@ -257,7 +259,7 @@ class TestVersionAndHelp:
         main(["--version"])
         out = capsys.readouterr().out
         assert "grafeo-memory" in out
-        assert "0.1.2" in out
+        assert "0.1.3" in out
 
     def test_no_command_shows_help(self, capsys):
         main([])

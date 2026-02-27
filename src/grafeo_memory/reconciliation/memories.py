@@ -84,6 +84,7 @@ async def reconcile_async(
         return []
 
     if not existing_memories:
+        logger.debug("No existing memories found — all %d facts will be ADD (fast-path)", len(new_facts))
         return _fast_path_add(new_facts)
 
     facts_text = "\n".join(f"{i + 1}. {f.text}" for i, f in enumerate(new_facts))

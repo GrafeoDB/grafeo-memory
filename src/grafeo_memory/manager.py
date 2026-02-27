@@ -7,7 +7,6 @@ import logging
 import time
 
 from ._compat import run_sync
-from ._compat import shutdown as _shutdown_runner
 from .embedding import EmbeddingClient
 from .extraction import extract_async
 from .history import HistoryEntry, get_history, record_history
@@ -16,6 +15,7 @@ from .reconciliation import reconcile_async, reconcile_relations_async
 from .search import graph_search, hybrid_search, search_similar
 from .search.vector import _get_props, _parse_metadata
 from .types import (
+    DERIVED_FROM_EDGE,
     ENTITY_LABEL,
     HAS_ENTITY_EDGE,
     MEMORY_LABEL,
@@ -103,10 +103,14 @@ class _MemoryCore:
             logger.warning("Failed to create vector index (deferred)", exc_info=True)
 
     def close(self) -> None:
-        """Close the database connection and the async runner."""
+        """Close the database connection.
+
+        The async runner is intentionally NOT closed here — it is shared across
+        sessions and cleaned up automatically at process exit via atexit. Closing
+        it per-session corrupts httpx/anyio transport state on Windows.
+        """
         if hasattr(self._db, "close"):
             self._db.close()
-        _shutdown_runner()
 
     # --- Scope filter building ---
 
@@ -452,6 +456,12 @@ class _MemoryCore:
                 seen[r.memory_id] = r
 
         final = sorted(seen.values(), key=lambda r: r.score, reverse=True)
+
+        # Topology boost: lightweight structural re-ranking (no LLM call)
+        if self._config.enable_topology_boost:
+            from .scoring import apply_topology_boost
+
+            final = apply_topology_boost(final, self._db, self._config)
 
         if rerank and self._reranker is not None:
             if hasattr(self._reranker, "rerank_async"):
@@ -923,11 +933,21 @@ class _MemoryCore:
             # Create new consolidated Memory nodes
             consolidated_texts = [m for m in result.output.memories if m]
             embeddings = self._embedder.embed(consolidated_texts)
+            new_memory_ids: list[int] = []
             for text, embedding in zip(consolidated_texts, embeddings, strict=True):
                 memory_id = self._create_memory(text, embedding, uid, None, None, now_ms, None, None)
                 self._db.set_node_property(int(memory_id), "source", "summarize")
                 record_history(self._db, int(memory_id), HistoryEntry(event="ADD", new_text=text, timestamp=now_ms))
                 all_events.append(MemoryEvent(action=MemoryAction.ADD, memory_id=memory_id, text=text))
+                new_memory_ids.append(int(memory_id))
+
+            # Create DERIVED_FROM edges: each summary derives from all originals in the batch
+            for new_mid in new_memory_ids:
+                for mid, _, _ in batch:
+                    try:
+                        self._db.create_edge(new_mid, int(mid), DERIVED_FROM_EDGE)
+                    except Exception:
+                        logger.debug("Failed to create DERIVED_FROM edge %d->%s", new_mid, mid, exc_info=True)
 
             # Delete originals (record history before deletion)
             for mid, old_text, _ in batch:
@@ -937,25 +957,14 @@ class _MemoryCore:
 
         return AddResult(all_events, usage=total)
 
-    def _history_impl(self, memory_id: str) -> list[dict]:
+    def _history_impl(self, memory_id: str) -> list[HistoryEntry]:
         """Shared history implementation using graph-native History nodes."""
         try:
             node_id = int(memory_id)
         except ValueError:
             return []
 
-        entries = get_history(self._db, node_id)
-        return [
-            {
-                "event": e.event,
-                "old_text": e.old_text,
-                "new_text": e.new_text,
-                "timestamp": e.timestamp,
-                "actor_id": e.actor_id,
-                "role": e.role,
-            }
-            for e in entries
-        ]
+        return get_history(self._db, node_id)
 
     def _set_importance_impl(self, memory_id: str, importance: float) -> bool:
         """Set the base importance score for a memory."""
@@ -1133,7 +1142,7 @@ class MemoryManager(_MemoryCore):
         """Set the base importance score (0.0-1.0) for a memory."""
         return self._set_importance_impl(memory_id, importance)
 
-    def history(self, memory_id: str) -> list[dict]:
+    def history(self, memory_id: str) -> list[HistoryEntry]:
         """Get the change history for a memory."""
         return self._history_impl(memory_id)
 
@@ -1265,6 +1274,6 @@ class AsyncMemoryManager(_MemoryCore):
         """Set the base importance score (0.0-1.0) for a memory."""
         return self._set_importance_impl(memory_id, importance)
 
-    async def history(self, memory_id: str) -> list[dict]:
+    async def history(self, memory_id: str) -> list[HistoryEntry]:
         """Get the change history for a memory."""
         return self._history_impl(memory_id)

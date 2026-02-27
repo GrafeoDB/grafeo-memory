@@ -69,6 +69,9 @@ class MemoryConfig:
     # Structural decay modulation (opt-in, requires enable_importance)
     enable_structural_decay: bool = False
     structural_feedback_gamma: float = 0.3
+    # Topology boost in search pipeline (opt-in, no LLM call)
+    enable_topology_boost: bool = False
+    topology_boost_factor: float = 0.2
     # Vision / multimodal (opt-in)
     enable_vision: bool = False
     vision_model: object | None = None
@@ -175,6 +178,7 @@ MEMORY_LABEL = "Memory"
 ENTITY_LABEL = "Entity"
 HAS_ENTITY_EDGE = "HAS_ENTITY"
 RELATION_EDGE = "RELATION"
+DERIVED_FROM_EDGE = "DERIVED_FROM"
 
 
 class AddResult(list):
@@ -198,6 +202,7 @@ class SearchResponse(list):
 
 
 __all__ = [
+    "DERIVED_FROM_EDGE",
     "ENTITY_LABEL",
     "HAS_ENTITY_EDGE",
     "MEMORY_LABEL",
