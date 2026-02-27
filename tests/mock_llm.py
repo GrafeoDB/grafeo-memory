@@ -70,3 +70,22 @@ def make_error_model() -> FunctionModel:
         raise ValueError("Simulated LLM error")
 
     return FunctionModel(function=handler)
+
+
+def make_error_then_succeed_model(outputs: list[dict]) -> FunctionModel:
+    """Create a FunctionModel that errors on the first call, then returns outputs sequentially.
+
+    Useful for testing fallback paths where combined extraction fails but separate calls succeed.
+    """
+    index = [0]
+
+    def handler(messages: list, info: AgentInfo) -> ModelResponse:
+        if index[0] == 0:
+            index[0] += 1
+            raise ValueError("Simulated combined extraction failure")
+        output = outputs[index[0] - 1]
+        index[0] += 1
+        tool_name = info.output_tools[0].name
+        return ModelResponse(parts=[ToolCallPart(tool_name=tool_name, args=output)])
+
+    return FunctionModel(function=handler)

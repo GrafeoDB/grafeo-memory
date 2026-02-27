@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import contextlib
 import sys
 from collections.abc import Coroutine
@@ -28,8 +29,10 @@ if sys.platform == "win32":
         pass
 
 # --- Persistent asyncio.Runner (Python 3.12+) ---
-# Keeps the event loop alive across multiple run_sync() calls, avoiding
-# the create/destroy overhead and the httpx transport teardown crash.
+# Keeps the event loop alive across multiple run_sync() calls and across
+# multiple MemoryManager sessions. Closing the runner between sessions
+# corrupts httpx/anyio global state on Windows, so we keep it alive for the
+# process lifetime and clean up via atexit.
 _runner: asyncio.Runner | None = None
 
 
@@ -61,10 +64,15 @@ def run_sync[T](coro: Coroutine[Any, Any, T]) -> T:
 def shutdown() -> None:
     """Close the persistent event loop runner.
 
-    Call on application exit or from MemoryManager.close() to cleanly
-    shut down the event loop and allow transports to finalize.
+    Called automatically at process exit via atexit. Should NOT be called
+    when closing individual MemoryManager sessions — the runner is shared
+    across sessions to avoid corrupting httpx/anyio transport state.
     """
     global _runner
     if _runner is not None:
-        _runner.close()
+        with contextlib.suppress(Exception):
+            _runner.close()
         _runner = None
+
+
+atexit.register(shutdown)

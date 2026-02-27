@@ -5,7 +5,7 @@ from .history import HistoryEntry
 from .manager import AsyncMemoryManager, MemoryManager
 from .messages import ImageContent, Message
 from .reranker import LLMReranker, Reranker
-from .scoring import apply_importance_scoring, compute_composite_score
+from .scoring import apply_importance_scoring, apply_topology_boost, compute_composite_score
 from .types import (
     AddResult,
     EntitiesOutput,
@@ -51,7 +51,8 @@ __all__ = [
     "SearchResponse",
     "SearchResult",
     "apply_importance_scoring",
+    "apply_topology_boost",
     "compute_composite_score",
 ]
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"

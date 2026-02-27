@@ -5,6 +5,32 @@ All notable changes to grafeo-memory are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-02-27
+
+Bug fixes, provenance tracking, and topology-boosted search.
+
+### Added
+
+- **Provenance edges**: `summarize()` creates `DERIVED_FROM` edges linking summary memories to the originals they replaced
+- **Topology boost** (opt-in): lightweight search re-ranking that promotes well-connected memories. Enable with `enable_topology_boost=True`, tune with `topology_boost_factor` (default 0.2). No LLM call, purely structural
+- **Extraction fallback**: when combined extraction fails (e.g. Mistral JSON mode), automatically falls back to separate fact + entity extraction calls instead of returning empty
+- New config options: `enable_topology_boost`, `topology_boost_factor`
+- 8 new tests (context manager reuse, extraction fallback, DERIVED_FROM edges, topology boost)
+
+### Fixed
+
+- **Context manager reuse**: closing a `MemoryManager` and opening a new one in the same process no longer corrupts the async event loop. The `asyncio.Runner` is now process-scoped and cleaned up via `atexit`
+- **Combined extraction traceback noise**: downgraded from `logger.warning` to `logger.debug` since the fallback is handled gracefully
+- **`history()` return type**: now returns `list[HistoryEntry]` instead of `list[dict]`, matching the exported type
+- **Reconciliation logging**: fast-path ADD (no existing memories found) now logs at debug level for easier diagnosis
+
+### Changed
+
+- `MemoryManager.close()` no longer calls `shutdown()` on the async runner
+- `history()` return type: `list[dict]` -> `list[HistoryEntry]` (breaking if code accessed dict keys)
+- CLI `history` command updated for `HistoryEntry` attribute access
+- README API reference rewritten with correct return types and iteration examples
+
 ## [0.1.2] - 2026-02-27
 
 Performance and quality release: fewer LLM calls per operation, smarter memory extraction, and topology-aware scoring.
@@ -75,6 +101,7 @@ Initial release.
 - **Windows async compatibility**: persistent `asyncio.Runner` and `ProactorEventLoop` safety net for Python 3.13+
 - 230 tests, 83% coverage
 
+[0.1.3]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/GrafeoDB/grafeo-memory/releases/tag/v0.1.0
