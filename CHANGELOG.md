@@ -40,7 +40,7 @@ Performance and quality release: fewer LLM calls per operation, smarter memory e
 - Removed local `grafeo` path dependency from `pyproject.toml` (`[tool.uv.sources]` section)
 - Configured `ty` checker: added `extra-paths = ["tests"]` and downgraded rules that produce false positives from Rust-extension deps
 
-## [0.1.1] - 2026-02-26
+## [0.1.1] - 2026-02-12
 
 ### Fixed
 
@@ -52,7 +52,7 @@ Performance and quality release: fewer LLM calls per operation, smarter memory e
 - Documentation pass on README
 - Lock file updates
 
-## [0.1.0] - 2026-02-25
+## [0.1.0] - 2026-02-12
 
 Initial release.
 
