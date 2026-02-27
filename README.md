@@ -18,10 +18,9 @@ grafeo-memory stack:  grafeo (single file) + LLM
 
 ```bash
 uv add grafeo-memory                   # base (bring your own LLM + embedder)
-uv add grafeo-memory[openai]           # + OpenAI embeddings
-uv add grafeo-memory[anthropic]        # + Anthropic
 uv add grafeo-memory[mistral]          # + Mistral embeddings
-uv add grafeo-memory[groq]             # + Groq
+uv add grafeo-memory[openai]           # + OpenAI embeddings
+uv add grafeo-memory[anthropic]        # + Anthropic embeddings
 uv add grafeo-memory[all]              # all providers
 ```
 
