@@ -12,7 +12,6 @@ from .._compat import run_sync
 from ..prompts import ENTITY_EXTRACTION_SYSTEM, ENTITY_EXTRACTION_USER
 from ..schemas import EntitiesOutput
 from ..types import Entity, ExtractionResult, Fact, Relation
-from .facts import extract_facts_async
 
 if TYPE_CHECKING:
     from pydantic_ai.usage import RunUsage

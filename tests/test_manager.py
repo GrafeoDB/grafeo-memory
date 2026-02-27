@@ -67,7 +67,11 @@ class TestMemoryManagerAdd:
     def test_add_with_user_id(self):
         manager = _make_manager(
             [
-                {"facts": ["bob likes hiking"], "entities": [{"name": "bob", "entity_type": "person"}], "relations": []},
+                {
+                    "facts": ["bob likes hiking"],
+                    "entities": [{"name": "bob", "entity_type": "person"}],
+                    "relations": [],
+                },
             ]
         )
         events = manager.add("Bob likes hiking", user_id="bob")
@@ -403,9 +407,17 @@ class TestHasEntityEdges:
         manager = _make_manager(
             [
                 # First add: combined extraction
-                {"facts": ["alice likes hiking"], "entities": [{"name": "alice", "entity_type": "person"}], "relations": []},
+                {
+                    "facts": ["alice likes hiking"],
+                    "entities": [{"name": "alice", "entity_type": "person"}],
+                    "relations": [],
+                },
                 # Second add: combined extraction
-                {"facts": ["alice likes cooking"], "entities": [{"name": "alice", "entity_type": "person"}], "relations": []},
+                {
+                    "facts": ["alice likes cooking"],
+                    "entities": [{"name": "alice", "entity_type": "person"}],
+                    "relations": [],
+                },
             ]
         )
         manager.add("Alice likes hiking")
@@ -458,8 +470,8 @@ class TestGraphSearch:
         """Search scores should be similarity (higher = more relevant)."""
         manager = _make_manager(
             [
-                {"facts": ["test_user prefers python"]},
-                {"entities": [], "relations": []},
+                # add: combined extraction
+                {"facts": ["test_user prefers python"], "entities": [], "relations": []},
                 # graph search entity extraction
                 {"entities": [], "relations": []},
             ]
@@ -479,8 +491,8 @@ class TestHybridSearch:
         """search() should use hybrid search (BM25 + vector) by default."""
         manager = _make_manager(
             [
-                {"facts": ["alice works at acme"]},
-                {"entities": [], "relations": []},
+                # add: combined extraction
+                {"facts": ["alice works at acme"], "entities": [], "relations": []},
                 # graph search entity extraction
                 {"entities": [], "relations": []},
             ]
@@ -499,8 +511,8 @@ class TestHybridSearch:
 
         manager = _make_manager(
             [
-                {"facts": ["bob likes hiking"]},
-                {"entities": [], "relations": []},
+                # add: combined extraction
+                {"facts": ["bob likes hiking"], "entities": [], "relations": []},
             ]
         )
         manager.add("Bob likes hiking")
@@ -531,10 +543,11 @@ class TestHybridSearch:
         """Hybrid search should respect user_id filtering."""
         manager = _make_manager(
             [
-                {"facts": ["alice likes tea"]},
-                {"entities": [], "relations": []},
-                {"facts": ["bob likes coffee"]},
-                {"entities": [], "relations": []},
+                # add 1: combined extraction
+                {"facts": ["alice likes tea"], "entities": [], "relations": []},
+                # add 2: combined extraction
+                {"facts": ["bob likes coffee"], "entities": [], "relations": []},
+                # search: graph search entity extraction
                 {"entities": [], "relations": []},
             ]
         )
@@ -552,10 +565,11 @@ class TestAdvancedFilters:
         """search() should support $gt filter on created_at."""
         manager = _make_manager(
             [
-                {"facts": ["old fact"]},
-                {"entities": [], "relations": []},
-                {"facts": ["new fact"]},
-                {"entities": [], "relations": []},
+                # add 1: combined extraction
+                {"facts": ["old fact"], "entities": [], "relations": []},
+                # add 2: combined extraction
+                {"facts": ["new fact"], "entities": [], "relations": []},
+                # search: graph search entity extraction
                 {"entities": [], "relations": []},
             ]
         )
@@ -615,12 +629,18 @@ class TestMultiUserIsolation:
         """Memories from different users should not interfere."""
         manager = _make_manager(
             [
-                # user1 add
-                {"facts": ["alice likes hiking"]},
-                {"entities": [{"name": "alice", "entity_type": "person"}], "relations": []},
-                # user2 add
-                {"facts": ["bob likes swimming"]},
-                {"entities": [{"name": "bob", "entity_type": "person"}], "relations": []},
+                # user1 add: combined extraction
+                {
+                    "facts": ["alice likes hiking"],
+                    "entities": [{"name": "alice", "entity_type": "person"}],
+                    "relations": [],
+                },
+                # user2 add: combined extraction
+                {
+                    "facts": ["bob likes swimming"],
+                    "entities": [{"name": "bob", "entity_type": "person"}],
+                    "relations": [],
+                },
             ]
         )
 
@@ -641,10 +661,10 @@ class TestMultiUserIsolation:
         """delete_all should only remove the specified user's memories."""
         manager = _make_manager(
             [
-                {"facts": ["alice likes hiking"]},
-                {"entities": [], "relations": []},
-                {"facts": ["bob likes swimming"]},
-                {"entities": [], "relations": []},
+                # add 1: combined extraction
+                {"facts": ["alice likes hiking"], "entities": [], "relations": []},
+                # add 2: combined extraction
+                {"facts": ["bob likes swimming"], "entities": [], "relations": []},
             ]
         )
 
@@ -665,8 +685,7 @@ class TestScoping:
         """Memories should be scoped by agent_id when set."""
         manager = _make_manager(
             [
-                {"facts": ["fact from agent1"]},
-                {"entities": [], "relations": []},
+                {"facts": ["fact from agent1"], "entities": [], "relations": []},
             ],
             agent_id="agent1",
         )
@@ -683,8 +702,7 @@ class TestScoping:
         """Memories should be scoped by run_id when set."""
         manager = _make_manager(
             [
-                {"facts": ["fact from run1"]},
-                {"entities": [], "relations": []},
+                {"facts": ["fact from run1"], "entities": [], "relations": []},
             ],
             run_id="run_001",
         )
@@ -702,8 +720,9 @@ class TestActorTracking:
         """Search results should include actor_id and role."""
         manager = _make_manager(
             [
-                {"facts": ["alice likes hiking"]},
-                {"entities": [], "relations": []},
+                # add: combined extraction
+                {"facts": ["alice likes hiking"], "entities": [], "relations": []},
+                # search: graph search entity extraction
                 {"entities": [], "relations": []},
             ]
         )
@@ -879,8 +898,8 @@ class TestImportanceScoring:
         """With enable_importance=False, search results have no importance/access_count."""
         manager = _make_manager(
             [
-                {"facts": ["alice likes hiking"]},
-                {"entities": [], "relations": []},
+                # add: combined extraction
+                {"facts": ["alice likes hiking"], "entities": [], "relations": []},
                 # graph search entity extraction
                 {"entities": [], "relations": []},
             ]
@@ -1084,8 +1103,9 @@ class TestAsyncManager:
         """AsyncMemoryManager should work with asyncio.run."""
         manager = _make_async_manager(
             [
-                {"facts": ["alice likes hiking"]},
-                {"entities": [], "relations": []},
+                # add: combined extraction
+                {"facts": ["alice likes hiking"], "entities": [], "relations": []},
+                # search: graph search entity extraction
                 {"entities": [], "relations": []},
             ]
         )
@@ -1109,8 +1129,7 @@ class TestAsyncManager:
         """AsyncMemoryManager should work as async context manager."""
         model = make_test_model(
             [
-                {"facts": ["async context test"]},
-                {"entities": [], "relations": []},
+                {"facts": ["async context test"], "entities": [], "relations": []},
             ]
         )
         embedder = MockEmbedder(16)
@@ -1127,8 +1146,7 @@ class TestAsyncManager:
         """AsyncMemoryManager.update() should work."""
         manager = _make_async_manager(
             [
-                {"facts": ["alice works at acme"]},
-                {"entities": [], "relations": []},
+                {"facts": ["alice works at acme"], "entities": [], "relations": []},
             ]
         )
 
@@ -1164,10 +1182,8 @@ class TestProceduralMemory:
         """add(memory_type='procedural') should extract and store with correct type."""
         manager = _make_manager(
             [
-                # extract_facts (procedural prompt used internally)
-                {"facts": ["always use formal tone in responses"]},
-                # extract_entities
-                {"entities": [], "relations": []},
+                # combined extraction (procedural prompt used internally)
+                {"facts": ["always use formal tone in responses"], "entities": [], "relations": []},
             ]
         )
         events = manager.add(
@@ -1221,14 +1237,12 @@ class TestProceduralMemory:
         """
         manager = _make_manager(
             [
-                # First add (semantic): extraction
-                {"facts": ["use python for data science"]},
-                {"entities": [], "relations": []},
-                # Second add (procedural): extraction
+                # First add (semantic): combined extraction
+                {"facts": ["use python for data science"], "entities": [], "relations": []},
+                # Second add (procedural): combined extraction
                 # Since reconciliation is scoped, the semantic memory won't be found
                 # as a candidate, so the procedural fact will be ADD'd
-                {"facts": ["always use python for data science"]},
-                {"entities": [], "relations": []},
+                {"facts": ["always use python for data science"], "entities": [], "relations": []},
             ]
         )
         # Add semantic memory
@@ -1324,10 +1338,10 @@ class TestProceduralMemory:
         """MemoryEvent.memory_type should be set for both semantic and procedural."""
         manager = _make_manager(
             [
-                {"facts": ["alice works at acme"]},
-                {"entities": [], "relations": []},
-                {"facts": ["always use formal tone"]},
-                {"entities": [], "relations": []},
+                # add 1 (semantic): combined extraction
+                {"facts": ["alice works at acme"], "entities": [], "relations": []},
+                # add 2 (procedural): combined extraction
+                {"facts": ["always use formal tone"], "entities": [], "relations": []},
             ]
         )
         sem_events = manager.add("Alice works at Acme")
@@ -1421,8 +1435,7 @@ class TestProceduralMemory:
         """custom_procedural_prompt in config should override the default procedural prompt."""
         manager = _make_manager(
             [
-                {"facts": ["custom procedural extraction"]},
-                {"entities": [], "relations": []},
+                {"facts": ["custom procedural extraction"], "entities": [], "relations": []},
             ],
             custom_procedural_prompt="You are a custom procedural extractor. Extract only deployment rules.",
         )
