@@ -40,19 +40,26 @@ def graph_search(
     k: int = 20,
     vector_property: str = "embedding",
     _on_usage: Callable[[str, RunUsage], None] | None = None,
+    _entities: list | None = None,
 ) -> list[SearchResult]:
     """Search by extracting entities from the query and finding linked memories.
 
     Traverses Entity nodes reachable via HAS_ENTITY edges back to Memory nodes.
     When an embedder is provided, scores results by cosine similarity against
     the query embedding. Otherwise falls back to a low fixed score (0.3).
-    Makes 1 LLM call (entity extraction from query).
+    Makes 1 LLM call (entity extraction from query) unless _entities is provided.
+
+    _entities: Pre-extracted entities to use instead of calling extract_entities().
+               Pass this when calling from an async context to avoid nested run_sync().
     """
-    try:
-        entities, _ = extract_entities(model, [Fact(text=query)], user_id, _on_usage=_on_usage)
-    except Exception:
-        logger.warning("graph_search: entity extraction failed for query=%r", query, exc_info=True)
-        return []
+    if _entities is not None:
+        entities = _entities
+    else:
+        try:
+            entities, _ = extract_entities(model, [Fact(text=query)], user_id, _on_usage=_on_usage)
+        except Exception:
+            logger.warning("graph_search: entity extraction failed for query=%r", query, exc_info=True)
+            return []
 
     if not entities:
         return []
