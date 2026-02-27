@@ -7,7 +7,10 @@ You are a memory extraction assistant. Your job is to extract discrete, \
 self-contained facts from conversation text.
 
 Rules:
-- Each fact should be a short, clear statement (one sentence).
+- Each fact should be a short, clear statement (one or two sentences).
+- Group closely related details into a single fact when they describe \
+the same topic (e.g., "marcus plays guitar, is learning jazz, and focuses on \
+Wes Montgomery's style" rather than three separate facts).
 - Replace pronouns with the actual names or identifiers when possible.
 - Prefer third-person statements ("alice likes hiking" not "I like hiking").
 - Extract preferences, biographical details, relationships, events, and opinions.
@@ -29,6 +32,7 @@ preferences, behavioral rules, and step-by-step procedures from conversation tex
 
 Rules:
 - Each extracted item should be a clear, actionable instruction or preference.
+- Group related preferences into a single statement when they describe the same topic.
 - Focus on: behavioral preferences ("always X", "prefer Y"), workflow instructions \
 ("when X happens, do Y"), style guidelines ("use formal tone"), tool/method preferences \
 ("use pytest for testing"), and step-by-step procedures.
@@ -39,7 +43,59 @@ Rules:
 - If the text contains no instructions or preferences, return an empty list."""
 
 
-# --- Entity / Relation extraction ---
+# --- Combined extraction (facts + entities in one call) ---
+
+COMBINED_EXTRACTION_SYSTEM = """\
+You are a memory extraction assistant. Your job is to extract facts, entities, \
+and relationships from conversation text.
+
+Extract two things:
+1. FACTS: Discrete, self-contained factual statements.
+   - Each fact should be a short, clear statement (one or two sentences).
+   - Group closely related details into a single fact when they describe \
+the same topic (e.g., "marcus plays guitar, is learning jazz, and focuses on \
+Wes Montgomery's style" rather than three separate facts).
+   - Replace pronouns with actual names or identifiers when possible.
+   - Prefer third-person statements ("alice likes hiking" not "I like hiking").
+   - Extract preferences, biographical details, relationships, events, and opinions.
+   - Do NOT extract greetings, pleasantries, or filler.
+
+2. ENTITIES and RELATIONSHIPS from the facts you extracted.
+   - Identify key entities (people, organizations, locations, concepts).
+   - Entity names should be lowercase with underscores for spaces (e.g., "acme_corp").
+   - Identify relationships between entities.
+
+If the text contains no memorable facts, return empty lists."""
+
+COMBINED_EXTRACTION_USER = """\
+Extract facts, entities, and relationships from the following text. \
+The speaker's user_id is "{user_id}".
+
+Text:
+{text}"""
+
+COMBINED_PROCEDURAL_EXTRACTION_SYSTEM = """\
+You are a procedural memory extraction assistant. Extract instructions, preferences, \
+behavioral rules, entities, and relationships from conversation text.
+
+Extract two things:
+1. FACTS: Clear, actionable instructions or preferences.
+   - Focus on: behavioral preferences ("always X", "prefer Y"), workflow instructions \
+("when X happens, do Y"), style guidelines, tool/method preferences, and procedures.
+   - Group related preferences into single statements when they describe the same topic.
+   - Replace pronouns with actual names or identifiers when possible.
+   - Prefer imperative or third-person form.
+   - Do NOT extract factual knowledge, biographical details, or events.
+
+2. ENTITIES and RELATIONSHIPS from the extracted items.
+   - Identify key entities (tools, technologies, people, concepts).
+   - Entity names should be lowercase with underscores for spaces.
+   - Identify relationships between entities.
+
+If the text contains no instructions or preferences, return empty lists."""
+
+
+# --- Entity / Relation extraction (standalone, used for search query extraction) ---
 
 ENTITY_EXTRACTION_SYSTEM = """\
 You are an entity and relationship extraction assistant. Given a list of facts, \
@@ -71,6 +127,10 @@ You MUST set target_memory_id to the ID of the memory being deleted.
 Rules:
 - Prefer UPDATE over DELETE+ADD when information changes \
 (e.g., job change, moved cities, relationship change).
+- Temporal updates: "now works at X" or "started at X" should UPDATE existing "works at Y", not ADD.
+- State changes: "car is fixed" should UPDATE "car is broken", not ADD alongside it.
+- Accumulative facts: "also likes sushi" should ADD — do NOT update existing "likes pizza". \
+The same relationship type can have multiple valid values.
 - Only DELETE when information is explicitly contradicted and cannot be merged via UPDATE.
 - Merge related facts into a single UPDATE when they refer to the same memory.
 - If there are no existing memories, all facts should be ADD.

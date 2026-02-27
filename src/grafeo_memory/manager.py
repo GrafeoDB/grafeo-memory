@@ -400,6 +400,9 @@ class _MemoryCore:
             mtype = MemoryType(memory_type) if isinstance(memory_type, str) else memory_type
             search_filters["memory_type"] = mtype.value
 
+        # Embed query once, share across both search paths
+        query_embedding = self._embedder.embed([query])[0]
+
         vector_results = hybrid_search(
             self._db,
             self._embedder,
@@ -409,6 +412,7 @@ class _MemoryCore:
             filters=search_filters,
             vector_property=self._config.vector_property,
             text_property=self._config.text_property,
+            query_embedding=query_embedding,
         )
 
         # Extract entities asynchronously to avoid nested run_sync() deadlock
@@ -417,9 +421,7 @@ class _MemoryCore:
         from .types import Fact
 
         try:
-            entities, _ = await extract_entities_async(
-                self._model, [Fact(text=query)], uid, _on_usage=on_usage
-            )
+            entities, _ = await extract_entities_async(self._model, [Fact(text=query)], uid, _on_usage=on_usage)
         except Exception:
             logger.warning("_search: entity extraction failed for query=%r", query, exc_info=True)
             entities = []
@@ -434,6 +436,7 @@ class _MemoryCore:
             vector_property=self._config.vector_property,
             _on_usage=on_usage,
             _entities=entities,
+            query_embedding=query_embedding,
         )
 
         # Post-hoc filter graph results by memory_type if specified

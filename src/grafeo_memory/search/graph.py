@@ -41,6 +41,7 @@ def graph_search(
     vector_property: str = "embedding",
     _on_usage: Callable[[str, RunUsage], None] | None = None,
     _entities: list | None = None,
+    query_embedding: list[float] | None = None,
 ) -> list[SearchResult]:
     """Search by extracting entities from the query and finding linked memories.
 
@@ -51,6 +52,7 @@ def graph_search(
 
     _entities: Pre-extracted entities to use instead of calling extract_entities().
                Pass this when calling from an async context to avoid nested run_sync().
+    query_embedding: Pre-computed query embedding to avoid redundant embed() calls.
     """
     if _entities is not None:
         entities = _entities
@@ -64,9 +66,8 @@ def graph_search(
     if not entities:
         return []
 
-    # Compute query embedding once for scoring
-    query_embedding: list[float] | None = None
-    if embedder is not None:
+    # Compute query embedding for scoring (skip if pre-computed)
+    if query_embedding is None and embedder is not None:
         try:
             query_embedding = embedder.embed([query])[0]
         except Exception:

@@ -63,10 +63,9 @@ def test_extract_entities_empty_facts():
 def test_full_extract():
     model = make_test_model(
         [
-            # First call: fact extraction
-            {"facts": ["bob lives in new york"]},
-            # Second call: entity extraction
+            # Single combined call: facts + entities + relations
             {
+                "facts": ["bob lives in new york"],
                 "entities": [
                     {"name": "bob", "entity_type": "person"},
                     {"name": "new_york", "entity_type": "location"},
@@ -81,3 +80,11 @@ def test_full_extract():
     assert len(result.facts) == 1
     assert len(result.entities) == 2
     assert len(result.relations) == 1
+
+
+def test_full_extract_error():
+    model = make_error_model()
+    result = extract(model, "test", "alice")
+    assert result.facts == []
+    assert result.entities == []
+    assert result.relations == []

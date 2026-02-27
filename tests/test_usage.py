@@ -69,8 +69,12 @@ class TestUsageOnAdd:
     def test_add_returns_add_result_with_usage(self):
         model = make_test_model(
             [
-                {"facts": ["alice works at acme"]},
-                {"entities": [{"name": "Alice", "entity_type": "PERSON"}], "relations": []},
+                # combined extraction
+                {
+                    "facts": ["alice works at acme"],
+                    "entities": [{"name": "Alice", "entity_type": "PERSON"}],
+                    "relations": [],
+                },
                 {"decisions": [{"action": "ADD", "text": "alice works at acme", "target_memory_id": None}]},
             ]
         )
@@ -84,8 +88,8 @@ class TestUsageOnAdd:
     def test_add_usage_callback_fires(self):
         model = make_test_model(
             [
-                {"facts": ["bob likes hiking"]},
-                {"entities": [], "relations": []},
+                # combined extraction
+                {"facts": ["bob likes hiking"], "entities": [], "relations": []},
                 {"decisions": [{"action": "ADD", "text": "bob likes hiking", "target_memory_id": None}]},
             ]
         )
@@ -93,7 +97,7 @@ class TestUsageOnAdd:
         manager = _make_manager(model, usage_callback=lambda op, u: calls.append((op, u)))
         manager.add("Bob likes hiking", user_id="u1")
         ops = [c[0] for c in calls]
-        assert "extract_facts" in ops
+        assert "extract" in ops
         assert all(isinstance(c[1], RunUsage) for c in calls)
         manager.close()
 
@@ -108,7 +112,7 @@ class TestUsageOnAdd:
         manager.close()
 
     def test_add_empty_extraction_returns_add_result(self):
-        model = make_test_model([{"facts": []}])
+        model = make_test_model([{"facts": [], "entities": [], "relations": []}])
         manager = _make_manager(model)
         result = manager.add("nothing here", user_id="u1")
         assert isinstance(result, AddResult)
@@ -120,8 +124,8 @@ class TestUsageOnAdd:
         """A failing usage callback should not prevent add() from succeeding."""
         model = make_test_model(
             [
-                {"facts": ["test fact"]},
-                {"entities": [], "relations": []},
+                # combined extraction
+                {"facts": ["test fact"], "entities": [], "relations": []},
                 {"decisions": [{"action": "ADD", "text": "test fact", "target_memory_id": None}]},
             ]
         )
@@ -166,8 +170,12 @@ class TestUsageOnSearch:
     def test_search_returns_search_response(self):
         model = make_test_model(
             [
-                {"facts": ["alice works at acme"]},
-                {"entities": [{"name": "Alice", "entity_type": "PERSON"}], "relations": []},
+                # add: combined extraction
+                {
+                    "facts": ["alice works at acme"],
+                    "entities": [{"name": "Alice", "entity_type": "PERSON"}],
+                    "relations": [],
+                },
                 {"decisions": [{"action": "ADD", "text": "alice works at acme", "target_memory_id": None}]},
                 # For graph search entity extraction during search
                 {"entities": [{"name": "Alice", "entity_type": "PERSON"}], "relations": []},
@@ -183,9 +191,14 @@ class TestUsageOnSearch:
     def test_search_usage_callback_fires(self):
         model = make_test_model(
             [
-                {"facts": ["alice works at acme"]},
-                {"entities": [{"name": "Alice", "entity_type": "PERSON"}], "relations": []},
+                # add: combined extraction
+                {
+                    "facts": ["alice works at acme"],
+                    "entities": [{"name": "Alice", "entity_type": "PERSON"}],
+                    "relations": [],
+                },
                 {"decisions": [{"action": "ADD", "text": "alice works at acme", "target_memory_id": None}]},
+                # search: graph search entity extraction
                 {"entities": [{"name": "Alice", "entity_type": "PERSON"}], "relations": []},
             ]
         )
@@ -217,13 +230,11 @@ class TestUsageOnBatch:
     def test_add_batch_infer_accumulates_usage(self):
         model = make_test_model(
             [
-                # First message
-                {"facts": ["fact one"]},
-                {"entities": [], "relations": []},
+                # First message: combined extraction
+                {"facts": ["fact one"], "entities": [], "relations": []},
                 {"decisions": [{"action": "ADD", "text": "fact one", "target_memory_id": None}]},
-                # Second message
-                {"facts": ["fact two"]},
-                {"entities": [], "relations": []},
+                # Second message: combined extraction
+                {"facts": ["fact two"], "entities": [], "relations": []},
                 {"decisions": [{"action": "ADD", "text": "fact two", "target_memory_id": None}]},
             ]
         )
@@ -232,7 +243,7 @@ class TestUsageOnBatch:
         assert isinstance(result, AddResult)
         assert len(result) == 2
         # Usage from both messages combined
-        assert result.usage.requests >= 4  # 2 extraction + 2 reconciliation (at minimum)
+        assert result.usage.requests >= 2  # at least 2 combined extraction calls
         manager.close()
 
 

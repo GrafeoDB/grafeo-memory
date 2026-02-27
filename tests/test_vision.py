@@ -87,7 +87,7 @@ class TestDescribeImages:
 class TestVisionIntegration:
     def test_add_with_vision_enabled(self):
         """When enable_vision=True and images present, descriptions are added to text."""
-        # Vision model for image description, then extraction model for fact/entity extraction
+        # Vision model for image description, then extraction model for combined extraction
         call_idx = [0]
 
         def handler(messages: list, info: AgentInfo) -> ModelResponse:
@@ -99,14 +99,8 @@ class TestVisionIntegration:
                 # Vision description call (output_type=str → no tools)
                 return ModelResponse(parts=[TextPart(content="A photo of Alice at Acme Corp office")])
 
-            # Extraction calls
-            if idx == 1:  # extract_facts
-                from pydantic_ai.messages import ToolCallPart
-
-                return ModelResponse(
-                    parts=[ToolCallPart(tool_name=tool_name, args={"facts": ["alice is at acme corp office"]})]
-                )
-            if idx == 2:  # extract_entities
+            # Combined extraction call
+            if idx == 1:
                 from pydantic_ai.messages import ToolCallPart
 
                 return ModelResponse(
@@ -114,6 +108,7 @@ class TestVisionIntegration:
                         ToolCallPart(
                             tool_name=tool_name,
                             args={
+                                "facts": ["alice is at acme corp office"],
                                 "entities": [{"name": "alice", "entity_type": "PERSON"}],
                                 "relations": [],
                             },
@@ -145,8 +140,8 @@ class TestVisionIntegration:
         """When enable_vision=False (default), images are silently dropped."""
         model = make_test_model(
             [
-                {"facts": ["user mentioned a photo"]},
-                {"entities": [], "relations": []},
+                # combined extraction
+                {"facts": ["user mentioned a photo"], "entities": [], "relations": []},
             ]
         )
         manager = _make_manager(model, enable_vision=False)
@@ -171,8 +166,8 @@ class TestVisionIntegration:
         """Vision config has no effect on plain text adds."""
         model = make_test_model(
             [
-                {"facts": ["alice likes hiking"]},
-                {"entities": [], "relations": []},
+                # combined extraction
+                {"facts": ["alice likes hiking"], "entities": [], "relations": []},
             ]
         )
         manager = _make_manager(model, enable_vision=True)
@@ -191,11 +186,15 @@ class TestVisionIntegration:
                 return ModelResponse(parts=[TextPart(content="A landscape photo")])
             from pydantic_ai.messages import ToolCallPart
 
-            if "facts" in str(info.output_tools[0]):
-                return ModelResponse(
-                    parts=[ToolCallPart(tool_name=tool_name, args={"facts": ["landscape photo seen"]})]
-                )
-            return ModelResponse(parts=[ToolCallPart(tool_name=tool_name, args={"entities": [], "relations": []})])
+            # Combined extraction returns facts + entities + relations
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name=tool_name,
+                        args={"facts": ["landscape photo seen"], "entities": [], "relations": []},
+                    )
+                ]
+            )
 
         model = FunctionModel(function=handler)
         calls: list[tuple[str, RunUsage]] = []

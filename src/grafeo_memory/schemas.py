@@ -42,6 +42,14 @@ class EntitiesOutput(BaseModel):
     relations: list[RelationItem] = []
 
 
+class ExtractionOutput(BaseModel):
+    """Combined output for fact + entity extraction in a single LLM call."""
+
+    facts: list[str]
+    entities: list[EntityItem] = []
+    relations: list[RelationItem] = []
+
+
 # --- Memory reconciliation ---
 
 
