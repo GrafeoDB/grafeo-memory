@@ -20,6 +20,7 @@ grafeo-memory stack:  grafeo (single file) + LLM
 uv add grafeo-memory                   # base (bring your own LLM + embedder)
 uv add grafeo-memory[openai]           # + OpenAI embeddings
 uv add grafeo-memory[anthropic]        # + Anthropic
+uv add grafeo-memory[mistral]          # + Mistral embeddings
 uv add grafeo-memory[groq]             # + Groq
 uv add grafeo-memory[all]              # all providers
 ```
@@ -31,6 +32,8 @@ pip install grafeo-memory[openai]
 ```
 
 ## Quick Start
+
+### OpenAI
 
 ```python
 from openai import OpenAI
@@ -53,6 +56,20 @@ with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
     # Search
     results = memory.search("Where does Alice work?")
     # -> [SearchResult(text="alice works at beta_inc", score=0.92, ...)]
+```
+
+### Mistral
+
+```python
+from mistralai import Mistral
+from grafeo_memory import MemoryManager, MemoryConfig, MistralEmbedder
+
+embedder = MistralEmbedder(Mistral())
+config = MemoryConfig(db_path="./memory.db", user_id="alice")
+
+with MemoryManager("mistral:mistral-small-latest", config, embedder=embedder) as memory:
+    events = memory.add("I just started a new job at Acme Corp as a data scientist")
+    results = memory.search("Where does Alice work?")
 ```
 
 ## How It Works
@@ -103,21 +120,30 @@ with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
 grafeo-memory uses [pydantic-ai](https://ai.pydantic.dev) model strings, so any provider pydantic-ai supports works out of the box:
 
 ```python
-# OpenAI
-MemoryManager("openai:gpt-4o-mini", config, embedder=embedder)
+# OpenAI — use OpenAIEmbedder for embeddings
+MemoryManager("openai:gpt-4o-mini", config, embedder=OpenAIEmbedder(OpenAI()))
 
-# Anthropic
+# Anthropic — pair with OpenAI or custom embedder
 MemoryManager("anthropic:claude-sonnet-4-5-20250929", config, embedder=embedder)
 
-# Groq
+# Groq — pair with OpenAI or custom embedder
 MemoryManager("groq:llama-3.3-70b-versatile", config, embedder=embedder)
 
-# Mistral
-MemoryManager("mistral:mistral-large-latest", config, embedder=embedder)
+# Mistral — use MistralEmbedder for embeddings
+MemoryManager("mistral:mistral-small-latest", config, embedder=MistralEmbedder(Mistral()))
 
-# Google
+# Google — pair with OpenAI or custom embedder
 MemoryManager("google-gla:gemini-2.0-flash", config, embedder=embedder)
 ```
+
+### Built-in Embedders
+
+| Class | Provider | Default Model | Install Extra |
+|---|---|---|---|
+| `OpenAIEmbedder` | OpenAI | `text-embedding-3-small` | `[openai]` |
+| `MistralEmbedder` | Mistral | `mistral-embed` | `[mistral]` |
+
+Both accept an optional `model` parameter to override the default.
 
 ## Custom Embeddings
 
@@ -176,7 +202,9 @@ Use as a context manager: `with MemoryManager(...) as memory:`. Multiple session
 - `similarity_threshold`: max embedding distance for reconciliation (default 0.7)
 - `embedding_dimensions`: vector dimensions (default 1536)
 - `enable_importance`: enable composite scoring with recency/frequency/importance (default False)
-- `weight_topology`: topology score weight for graph-connected memories (default 0.0)
+- `weight_topology`: topology score weight for graph-connected memories (default 0.0, requires `enable_importance`)
+- `enable_topology_boost`: re-rank search results by graph connectivity, no LLM call (default False)
+- `topology_boost_factor`: strength of topology boost (default 0.2)
 
 ### `EmbeddingClient` (Protocol)
 
