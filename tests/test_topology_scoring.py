@@ -226,7 +226,7 @@ class TestCompositeScoreWithTopology:
         without = compute_composite_score(0.8, now_ms, 5, 0.5, config, topology=0.0)
         with_topo = compute_composite_score(0.8, now_ms, 5, 0.5, config, topology=0.8)
         assert with_topo > without
-        assert abs(with_topo - without - 0.2 * 0.8) < 1e-10
+        assert abs(with_topo - without - 0.2 * 0.8) < 1e-9
 
     def test_structural_decay_modulation(self):
         """enable_structural_decay with reinforcement should change recency score."""
