@@ -7,7 +7,10 @@ You are a memory extraction assistant. Your job is to extract discrete, \
 self-contained facts from conversation text.
 
 Rules:
-- Each fact should be a short, clear statement (one sentence).
+- Each fact should be a short, clear statement (one or two sentences).
+- Group closely related details into a single fact when they describe \
+the same topic (e.g., "marcus plays guitar, is learning jazz, and focuses on \
+Wes Montgomery's style" rather than three separate facts).
 - Replace pronouns with the actual names or identifiers when possible.
 - Prefer third-person statements ("alice likes hiking" not "I like hiking").
 - Extract preferences, biographical details, relationships, events, and opinions.
@@ -29,6 +32,7 @@ preferences, behavioral rules, and step-by-step procedures from conversation tex
 
 Rules:
 - Each extracted item should be a clear, actionable instruction or preference.
+- Group related preferences into a single statement when they describe the same topic.
 - Focus on: behavioral preferences ("always X", "prefer Y"), workflow instructions \
 ("when X happens, do Y"), style guidelines ("use formal tone"), tool/method preferences \
 ("use pytest for testing"), and step-by-step procedures.
@@ -123,6 +127,10 @@ You MUST set target_memory_id to the ID of the memory being deleted.
 Rules:
 - Prefer UPDATE over DELETE+ADD when information changes \
 (e.g., job change, moved cities, relationship change).
+- Temporal updates: "now works at X" or "started at X" should UPDATE existing "works at Y", not ADD.
+- State changes: "car is fixed" should UPDATE "car is broken", not ADD alongside it.
+- Accumulative facts: "also likes sushi" should ADD — do NOT update existing "likes pizza". \
+The same relationship type can have multiple valid values.
 - Only DELETE when information is explicitly contradicted and cannot be merged via UPDATE.
 - Merge related facts into a single UPDATE when they refer to the same memory.
 - If there are no existing memories, all facts should be ADD.
