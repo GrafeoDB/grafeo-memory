@@ -31,10 +31,9 @@ class TestMemoryManagerAdd:
     def test_add_new_facts(self):
         manager = _make_manager(
             [
-                # extract_facts
-                {"facts": ["alice works at acme corp"]},
-                # extract_entities
+                # combined extraction
                 {
+                    "facts": ["alice works at acme corp"],
                     "entities": [
                         {"name": "alice", "entity_type": "person"},
                         {"name": "acme_corp", "entity_type": "organization"},
@@ -68,8 +67,7 @@ class TestMemoryManagerAdd:
     def test_add_with_user_id(self):
         manager = _make_manager(
             [
-                {"facts": ["bob likes hiking"]},
-                {"entities": [{"name": "bob", "entity_type": "person"}], "relations": []},
+                {"facts": ["bob likes hiking"], "entities": [{"name": "bob", "entity_type": "person"}], "relations": []},
             ]
         )
         events = manager.add("Bob likes hiking", user_id="bob")
@@ -80,8 +78,7 @@ class TestMemoryManagerAdd:
         """add() should accept a single message dict."""
         manager = _make_manager(
             [
-                {"facts": ["alice likes tea"]},
-                {"entities": [], "relations": []},
+                {"facts": ["alice likes tea"], "entities": [], "relations": []},
             ]
         )
         events = manager.add({"role": "user", "content": "Alice likes tea"})
@@ -93,8 +90,7 @@ class TestMemoryManagerAdd:
         """add() should accept a list of message dicts."""
         manager = _make_manager(
             [
-                {"facts": ["alice works at acme"]},
-                {"entities": [], "relations": []},
+                {"facts": ["alice works at acme"], "entities": [], "relations": []},
             ]
         )
         events = manager.add(
@@ -110,8 +106,7 @@ class TestMemoryManagerAdd:
         """add() should extract actor from named messages."""
         manager = _make_manager(
             [
-                {"facts": ["alice likes hiking"]},
-                {"entities": [], "relations": []},
+                {"facts": ["alice likes hiking"], "entities": [], "relations": []},
             ]
         )
         events = manager.add({"role": "user", "content": "I like hiking", "name": "alice"})
@@ -126,8 +121,7 @@ class TestCustomPrompts:
         """Custom fact prompt should be passed to the extraction agent."""
         manager = _make_manager(
             [
-                {"facts": ["custom extracted fact"]},
-                {"entities": [], "relations": []},
+                {"facts": ["custom extracted fact"], "entities": [], "relations": []},
             ],
             custom_fact_prompt="You are a custom extractor. Extract only food preferences.",
         )
@@ -158,12 +152,10 @@ class TestBatchAdd:
         """add_batch(infer=True) should process each message through extraction."""
         manager = _make_manager(
             [
-                # First message extraction
-                {"facts": ["alice likes hiking"]},
-                {"entities": [], "relations": []},
-                # Second message extraction
-                {"facts": ["bob likes swimming"]},
-                {"entities": [], "relations": []},
+                # First message combined extraction
+                {"facts": ["alice likes hiking"], "entities": [], "relations": []},
+                # Second message combined extraction
+                {"facts": ["bob likes swimming"], "entities": [], "relations": []},
             ]
         )
         events = manager.add_batch(["Alice likes hiking", "Bob likes swimming"])
@@ -225,8 +217,7 @@ class TestMemoryManagerUpdate:
         """update() should replace memory text and re-embed."""
         manager = _make_manager(
             [
-                {"facts": ["alice works at acme"]},
-                {"entities": [], "relations": []},
+                {"facts": ["alice works at acme"], "entities": [], "relations": []},
             ]
         )
         events = manager.add("Alice works at Acme Corp")
@@ -246,8 +237,7 @@ class TestMemoryManagerUpdate:
         """update() should record a history entry."""
         manager = _make_manager(
             [
-                {"facts": ["alice works at acme"]},
-                {"entities": [], "relations": []},
+                {"facts": ["alice works at acme"], "entities": [], "relations": []},
             ]
         )
         events = manager.add("Alice works at Acme Corp")
@@ -268,9 +258,8 @@ class TestMemoryManagerSearch:
     def test_search_returns_results(self):
         manager = _make_manager(
             [
-                # add call
-                {"facts": ["test_user prefers python"]},
-                {"entities": [], "relations": []},
+                # add call: combined extraction
+                {"facts": ["test_user prefers python"], "entities": [], "relations": []},
                 # search will use vector_search internally + graph search (entity extraction)
                 {"entities": [], "relations": []},
             ]

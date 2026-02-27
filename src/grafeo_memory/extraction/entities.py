@@ -66,6 +66,34 @@ def extract_entities(
     return run_sync(extract_entities_async(model, facts, user_id, _on_usage=_on_usage))
 
 
+async def _extract_combined_async(
+    model: object,
+    text: str,
+    user_id: str,
+    *,
+    custom_prompt: str | None = None,
+    _on_usage: Callable[[str, RunUsage], None] | None = None,
+) -> ExtractionResult:
+    """Extract facts, entities, and relations in a single LLM call (async)."""
+    from ..prompts import COMBINED_EXTRACTION_SYSTEM, COMBINED_EXTRACTION_USER
+    from ..schemas import ExtractionOutput
+
+    agent = Agent(model, system_prompt=custom_prompt or COMBINED_EXTRACTION_SYSTEM, output_type=ExtractionOutput)
+    try:
+        result = await agent.run(COMBINED_EXTRACTION_USER.format(user_id=user_id, text=text))
+    except Exception:
+        logger.warning("Combined extraction failed", exc_info=True)
+        return ExtractionResult()
+    if _on_usage is not None:
+        _on_usage("extract", result.usage())
+    facts = [Fact(text=f) for f in result.output.facts if f]
+    entities = [Entity(name=e.name, entity_type=e.entity_type) for e in result.output.entities]
+    relations = [
+        Relation(source=r.source, target=r.target, relation_type=r.relation_type) for r in result.output.relations
+    ]
+    return ExtractionResult(facts=facts, entities=entities, relations=relations)
+
+
 async def extract_async(
     model: object,
     text: str,
@@ -75,23 +103,17 @@ async def extract_async(
     memory_type: str = "semantic",
     _on_usage: Callable[[str, RunUsage], None] | None = None,
 ) -> ExtractionResult:
-    """Run the full extraction pipeline (async): facts, then entities and relations.
+    """Run extraction pipeline (async): facts + entities + relations in 1 LLM call.
 
-    This makes 2 LLM calls: one for fact extraction, one for entity/relation extraction.
     For procedural memory_type, uses the procedural extraction prompt unless custom_fact_prompt is set.
     """
     effective_prompt = custom_fact_prompt
     if effective_prompt is None and memory_type == "procedural":
-        from ..prompts import PROCEDURAL_EXTRACTION_SYSTEM
+        from ..prompts import COMBINED_PROCEDURAL_EXTRACTION_SYSTEM
 
-        effective_prompt = PROCEDURAL_EXTRACTION_SYSTEM
+        effective_prompt = COMBINED_PROCEDURAL_EXTRACTION_SYSTEM
 
-    facts = await extract_facts_async(model, text, user_id, custom_prompt=effective_prompt, _on_usage=_on_usage)
-    if not facts:
-        return ExtractionResult()
-
-    entities, relations = await extract_entities_async(model, facts, user_id, _on_usage=_on_usage)
-    return ExtractionResult(facts=facts, entities=entities, relations=relations)
+    return await _extract_combined_async(model, text, user_id, custom_prompt=effective_prompt, _on_usage=_on_usage)
 
 
 def extract(
