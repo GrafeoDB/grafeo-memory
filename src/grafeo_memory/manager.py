@@ -417,9 +417,7 @@ class _MemoryCore:
         from .types import Fact
 
         try:
-            entities, _ = await extract_entities_async(
-                self._model, [Fact(text=query)], uid, _on_usage=on_usage
-            )
+            entities, _ = await extract_entities_async(self._model, [Fact(text=query)], uid, _on_usage=on_usage)
         except Exception:
             logger.warning("_search: entity extraction failed for query=%r", query, exc_info=True)
             entities = []

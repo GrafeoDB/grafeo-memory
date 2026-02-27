@@ -23,13 +23,15 @@ def vector_search(
     k: int = 10,
     filters: dict | None = None,
     vector_property: str = "embedding",
+    query_embedding: list[float] | None = None,
 ) -> list[SearchResult]:
     """Search memories by vector similarity.
 
     Embeds the query, runs cosine similarity search, and converts
     distances to similarity scores (higher = more relevant).
     """
-    query_embedding = embedder.embed([query])[0]
+    if query_embedding is None:
+        query_embedding = embedder.embed([query])[0]
 
     search_filters = {"user_id": user_id}
     if filters:
@@ -75,6 +77,7 @@ def hybrid_search(
     vector_property: str = "embedding",
     text_property: str = "text",
     fusion: str | None = None,
+    query_embedding: list[float] | None = None,
 ) -> list[SearchResult]:
     """Search memories using hybrid BM25 + vector search with RRF fusion.
 
@@ -85,12 +88,20 @@ def hybrid_search(
     Default fusion is RRF with k=1, tuned for small memory collections
     (10-100 memories) where score differentiation matters.
     """
+    if query_embedding is None:
+        query_embedding = embedder.embed([query])[0]
+
     if not hasattr(db, "hybrid_search"):
         return vector_search(
-            db, embedder, query, user_id=user_id, k=k, filters=filters, vector_property=vector_property
+            db,
+            embedder,
+            query,
+            user_id=user_id,
+            k=k,
+            filters=filters,
+            vector_property=vector_property,
+            query_embedding=query_embedding,
         )
-
-    query_embedding = embedder.embed([query])[0]
 
     # Build combined filters for post-hoc application
     all_filters: dict = {"user_id": user_id}
@@ -111,7 +122,14 @@ def hybrid_search(
     except Exception:
         logger.warning("hybrid_search failed, falling back to vector_search", exc_info=True)
         return vector_search(
-            db, embedder, query, user_id=user_id, k=k, filters=filters, vector_property=vector_property
+            db,
+            embedder,
+            query,
+            user_id=user_id,
+            k=k,
+            filters=filters,
+            vector_property=vector_property,
+            query_embedding=query_embedding,
         )
 
     # Re-rank by cosine similarity: hybrid finds candidates, vector ranks them.
