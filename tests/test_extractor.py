@@ -80,3 +80,11 @@ def test_full_extract():
     assert len(result.facts) == 1
     assert len(result.entities) == 2
     assert len(result.relations) == 1
+
+
+def test_full_extract_error():
+    model = make_error_model()
+    result = extract(model, "test", "alice")
+    assert result.facts == []
+    assert result.entities == []
+    assert result.relations == []

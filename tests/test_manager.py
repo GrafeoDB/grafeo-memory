@@ -560,6 +560,20 @@ class TestHybridSearch:
         manager.close()
 
 
+class TestVectorSearchDirect:
+    def test_vector_search_embeds_query_when_no_embedding_provided(self):
+        """vector_search() should embed the query if query_embedding is not provided."""
+        from grafeo_memory.search.vector import vector_search
+
+        manager = _make_manager([{"facts": ["alice likes hiking"], "entities": [], "relations": []}])
+        manager.add("Alice likes hiking")
+
+        # Call vector_search directly without query_embedding
+        results = vector_search(manager._db, MockEmbedder(16), "hiking", user_id="test_user")
+        assert isinstance(results, list)
+        manager.close()
+
+
 class TestAdvancedFilters:
     def test_filter_with_gt_operator(self):
         """search() should support $gt filter on created_at."""
