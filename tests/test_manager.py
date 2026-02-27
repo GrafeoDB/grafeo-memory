@@ -288,8 +288,7 @@ class TestMemoryManagerDelete:
     def test_delete_memory(self):
         manager = _make_manager(
             [
-                {"facts": ["carol likes tea"]},
-                {"entities": [], "relations": []},
+                {"facts": ["carol likes tea"], "entities": [], "relations": []},
             ]
         )
         events = manager.add("Carol likes tea")
@@ -326,8 +325,7 @@ class TestMemoryManagerHistory:
         """add() should create a history entry."""
         manager = _make_manager(
             [
-                {"facts": ["test fact"]},
-                {"entities": [], "relations": []},
+                {"facts": ["test fact"], "entities": [], "relations": []},
             ]
         )
         events = manager.add("test fact")
@@ -356,8 +354,7 @@ class TestMemoryManagerContextManager:
     def test_context_manager(self):
         model = make_test_model(
             [
-                {"facts": ["context manager works"]},
-                {"entities": [], "relations": []},
+                {"facts": ["context manager works"], "entities": [], "relations": []},
             ]
         )
         embedder = MockEmbedder(16)
@@ -372,8 +369,9 @@ class TestHasEntityEdges:
         """After add(), Memory nodes should be linked to Entity nodes via HAS_ENTITY."""
         manager = _make_manager(
             [
-                {"facts": ["alice works at acme corp"]},
+                # combined extraction
                 {
+                    "facts": ["alice works at acme corp"],
                     "entities": [
                         {"name": "alice", "entity_type": "person"},
                         {"name": "acme_corp", "entity_type": "organization"},
@@ -404,12 +402,10 @@ class TestHasEntityEdges:
         """Adding the same entity name twice should reuse the existing node."""
         manager = _make_manager(
             [
-                # First add
-                {"facts": ["alice likes hiking"]},
-                {"entities": [{"name": "alice", "entity_type": "person"}], "relations": []},
-                # Second add
-                {"facts": ["alice likes cooking"]},
-                {"entities": [{"name": "alice", "entity_type": "person"}], "relations": []},
+                # First add: combined extraction
+                {"facts": ["alice likes hiking"], "entities": [{"name": "alice", "entity_type": "person"}], "relations": []},
+                # Second add: combined extraction
+                {"facts": ["alice likes cooking"], "entities": [{"name": "alice", "entity_type": "person"}], "relations": []},
             ]
         )
         manager.add("Alice likes hiking")
@@ -432,9 +428,9 @@ class TestGraphSearch:
         """Graph search should find memories linked to queried entities."""
         manager = _make_manager(
             [
-                # add() call: fact extraction + entity extraction
-                {"facts": ["alice works at acme corp"]},
+                # add() call: combined extraction
                 {
+                    "facts": ["alice works at acme corp"],
                     "entities": [
                         {"name": "alice", "entity_type": "person"},
                         {"name": "acme_corp", "entity_type": "organization"},

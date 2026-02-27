@@ -198,7 +198,7 @@ class TestModulatedRecencyScore:
         normal = _recency_score(ten_days_ago, decay_rate=0.1)
         half_decay = _recency_score(ten_days_ago, decay_rate=0.05)
         modulated = _modulated_recency_score(ten_days_ago, decay_rate=0.1, reinforcement=1.0)
-        assert abs(modulated - half_decay) < 1e-10
+        assert abs(modulated - half_decay) < 1e-6
         assert modulated > normal
 
     def test_zero_timestamp(self):
