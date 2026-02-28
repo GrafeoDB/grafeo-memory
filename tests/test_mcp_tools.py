@@ -163,7 +163,7 @@ class TestMemoryDelete:
     def test_basic(self):
         from grafeo_memory.mcp.tools import memory_delete
 
-        ctx, mgr = _make_ctx()
+        ctx, _ = _make_ctx()
         result = json.loads(asyncio.run(memory_delete("42", ctx=ctx)))
         assert result["deleted"] is True
         assert result["memory_id"] == "42"
@@ -181,7 +181,7 @@ class TestMemoryList:
     def test_basic(self):
         from grafeo_memory.mcp.tools import memory_list
 
-        ctx, mgr = _make_ctx()
+        ctx, _ = _make_ctx()
         result = json.loads(asyncio.run(memory_list(ctx=ctx)))
         assert "memories" in result
         assert len(result["memories"]) == 1
@@ -218,7 +218,7 @@ class TestMemoryHistory:
     def test_basic(self):
         from grafeo_memory.mcp.tools import memory_history
 
-        ctx, mgr = _make_ctx()
+        ctx, _ = _make_ctx()
         result = json.loads(asyncio.run(memory_history("42", ctx=ctx)))
         assert "history" in result
         assert len(result["history"]) == 1
