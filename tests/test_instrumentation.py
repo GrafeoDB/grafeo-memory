@@ -61,3 +61,30 @@ class TestInstrumentInit:
         finally:
             # Restore original to avoid affecting other tests
             Agent._instrument_default = original
+
+
+class TestTraceOperation:
+    def test_disabled_yields_none(self):
+        """When disabled (default), yields None with zero overhead."""
+        with trace_operation("test-op") as span:
+            assert span is None
+
+    def test_disabled_explicit(self):
+        with trace_operation("test-op", enabled=False, attributes={"key": "val"}) as span:
+            assert span is None
+
+    def test_enabled_without_otel_yields_none(self):
+        """When enabled but opentelemetry isn't installed, gracefully yields None."""
+        import sys
+
+        # Temporarily hide opentelemetry.trace if present
+        real_module = sys.modules.get("opentelemetry.trace")
+        sys.modules["opentelemetry.trace"] = None  # type: ignore[assignment]
+        try:
+            with trace_operation("test-op", enabled=True) as span:
+                assert span is None
+        finally:
+            if real_module is not None:
+                sys.modules["opentelemetry.trace"] = real_module
+            else:
+                sys.modules.pop("opentelemetry.trace", None)
