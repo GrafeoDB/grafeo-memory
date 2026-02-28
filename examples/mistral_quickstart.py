@@ -4,7 +4,7 @@ Demonstrates the full workflow with Mistral as both the LLM and
 embedding provider: add, reconcile, search, and history.
 
 Requires:
-    pip install grafeo-memory[mistral]
+    uv add grafeo-memory[mistral]
     MISTRAL_API_KEY environment variable
 """
 

@@ -8,7 +8,7 @@ Each type uses its own extraction prompt and reconciliation scope,
 so procedural and semantic memories never interfere with each other.
 
 Requires:
-    pip install grafeo-memory[openai]
+    uv add grafeo-memory[openai]
     OPENAI_API_KEY environment variable
 """
 

@@ -8,7 +8,7 @@ grafeo-memory can process images via a vision-capable LLM:
 Messages use the OpenAI multimodal content format.
 
 Requires:
-    pip install grafeo-memory[openai]
+    uv add grafeo-memory[openai]
     OPENAI_API_KEY environment variable
     A vision-capable model (gpt-4o, gpt-4o-mini)
 """

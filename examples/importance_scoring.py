@@ -9,7 +9,7 @@ When enabled, search results are ranked by a composite score:
 - importance: user-set priority (0.0 - 1.0)
 
 Requires:
-    pip install grafeo-memory[openai]
+    uv add grafeo-memory[openai]
     OPENAI_API_KEY environment variable
 """
 

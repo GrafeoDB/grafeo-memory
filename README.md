@@ -169,7 +169,7 @@ memory = MemoryManager("openai:gpt-4o-mini", config, embedder=MyEmbedder())
 grafeo-memory includes a built-in MCP server so AI agents (Claude Desktop, Cursor, etc.) can use it as a tool.
 
 ```bash
-pip install grafeo-memory[mcp]
+uv add grafeo-memory[mcp]
 ```
 
 ### Claude Desktop
@@ -321,7 +321,7 @@ grafeo-memory is part of the GrafeoDB ecosystem:
 - **[grafeo-langchain](https://github.com/GrafeoDB/grafeo-langchain)**: LangChain integration
 - **[grafeo-llamaindex](https://github.com/GrafeoDB/grafeo-llamaindex)**: LlamaIndex integration
 - **[grafeo-mcp](https://github.com/GrafeoDB/grafeo-mcp)**: MCP server for raw GrafeoDB access
-- **grafeo-memory-mcp** (built-in): MCP server for the memory API (`pip install grafeo-memory[mcp]`)
+- **grafeo-memory-mcp** (built-in): MCP server for the memory API (`uv add grafeo-memory[mcp]`)
 
 All packages share the same `.db` file. Build memories with grafeo-memory, query them with grafeo-langchain, expose them via MCP.
 
