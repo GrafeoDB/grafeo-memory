@@ -5,6 +5,7 @@ from __future__ import annotations
 from mock_llm import MockEmbedder, make_test_model
 
 from grafeo_memory import InstrumentationSettings, MemoryConfig, MemoryManager
+from grafeo_memory._tracing import trace_operation
 
 
 class TestInstrumentConfig:
