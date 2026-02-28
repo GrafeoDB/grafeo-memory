@@ -10,8 +10,6 @@ from typing import Any
 from grafeo_memory.history import HistoryEntry
 from grafeo_memory.types import MemoryAction, MemoryEvent, SearchResult
 
-
-
 # ---------------------------------------------------------------------------
 # Mock MCP context: ctx.request_context.lifespan_context.manager
 # ---------------------------------------------------------------------------

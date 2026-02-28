@@ -77,7 +77,7 @@ mcp = FastMCP("grafeo-memory", lifespan=app_lifespan)
 # Import modules to register tools/resources/prompts on the mcp instance.
 import grafeo_memory.mcp.prompts  # noqa: E402
 import grafeo_memory.mcp.resources  # noqa: E402
-import grafeo_memory.mcp.tools  # noqa: E402
+import grafeo_memory.mcp.tools  # noqa: E402, F401
 
 
 def main():
