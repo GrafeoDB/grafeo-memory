@@ -104,13 +104,17 @@ async def extract_async(
 ) -> ExtractionResult:
     """Run extraction pipeline (async): tries combined (1 LLM call), falls back to separate calls.
 
-    For procedural memory_type, uses the procedural extraction prompt unless custom_fact_prompt is set.
+    For procedural/episodic memory_type, uses the appropriate extraction prompt unless custom_fact_prompt is set.
     """
     effective_prompt = custom_fact_prompt
     if effective_prompt is None and memory_type == "procedural":
         from ..prompts import COMBINED_PROCEDURAL_EXTRACTION_SYSTEM
 
         effective_prompt = COMBINED_PROCEDURAL_EXTRACTION_SYSTEM
+    elif effective_prompt is None and memory_type == "episodic":
+        from ..prompts import COMBINED_EPISODIC_EXTRACTION_SYSTEM
+
+        effective_prompt = COMBINED_EPISODIC_EXTRACTION_SYSTEM
 
     result = await _extract_combined_async(model, text, user_id, custom_prompt=effective_prompt, _on_usage=_on_usage)
     if result.facts:

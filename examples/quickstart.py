@@ -4,7 +4,7 @@ Demonstrates the core loop: add memories, watch reconciliation
 (ADD / UPDATE / DELETE decisions), search, and list.
 
 Requires:
-    pip install grafeo-memory[openai]
+    uv add grafeo-memory[openai]
     OPENAI_API_KEY environment variable
 """
 

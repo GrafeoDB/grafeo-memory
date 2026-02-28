@@ -1,6 +1,6 @@
 [project]
 name = "grafeo-memory"
-version = "0.1.3"
+version = "0.1.4"
 description = "AI memory layer powered by GrafeoDB's hybrid graph and vector database"
 readme = "README.md"
 license = "Apache-2.0"
@@ -24,10 +24,12 @@ anthropic = ["pydantic-ai-slim[anthropic]"]
 google = ["pydantic-ai-slim[google]"]
 groq = ["pydantic-ai-slim[groq]"]
 mistral = ["pydantic-ai-slim[mistral]", "mistralai>=1.0"]
+mcp = ["mcp>=1.26,<2"]
 all = ["pydantic-ai-slim[openai,anthropic,google,groq,mistral]", "openai>=1.0", "mistralai>=1.0"]
 
 [project.scripts]
 grafeo-memory = "grafeo_memory.cli:main"
+grafeo-memory-mcp = "grafeo_memory.mcp.server:main"
 
 [project.urls]
 Homepage = "https://github.com/GrafeoDB/grafeo-memory"

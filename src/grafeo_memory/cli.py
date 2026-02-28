@@ -82,7 +82,7 @@ def _create_embedder(model: str):
             from mistralai import Mistral
         except ImportError:
             print("Error: mistralai package not installed.", file=sys.stderr)
-            print("Install it with: pip install grafeo-memory[mistral]", file=sys.stderr)
+            print("Install it with: uv add grafeo-memory[mistral]", file=sys.stderr)
             sys.exit(1)
         from .embedding import MistralEmbedder
 
@@ -94,7 +94,7 @@ def _create_embedder(model: str):
         from openai import OpenAI
     except ImportError:
         print("Error: openai package not installed.", file=sys.stderr)
-        print("Install it with: pip install grafeo-memory[openai]", file=sys.stderr)
+        print("Install it with: uv add grafeo-memory[openai]", file=sys.stderr)
         sys.exit(1)
     from .embedding import OpenAIEmbedder
 

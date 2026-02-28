@@ -4,7 +4,7 @@ AsyncMemoryManager provides the same API as MemoryManager
 but with async/await support for frameworks like FastAPI, aiohttp, etc.
 
 Requires:
-    pip install grafeo-memory[openai]
+    uv add grafeo-memory[openai]
     OPENAI_API_KEY environment variable
 """
 

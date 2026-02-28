@@ -18,10 +18,10 @@ grafeo-memory stack:  grafeo (single file) + LLM
 
 ```bash
 uv add grafeo-memory                   # base (bring your own LLM + embedder)
-uv add grafeo-memory[openai]           # + OpenAI embeddings
-uv add grafeo-memory[anthropic]        # + Anthropic
 uv add grafeo-memory[mistral]          # + Mistral embeddings
-uv add grafeo-memory[groq]             # + Groq
+uv add grafeo-memory[openai]           # + OpenAI embeddings
+uv add grafeo-memory[anthropic]        # + Anthropic embeddings
+uv add grafeo-memory[mcp]             # + MCP server for AI agents
 uv add grafeo-memory[all]              # all providers
 ```
 
@@ -164,6 +164,87 @@ class MyEmbedder:
 memory = MemoryManager("openai:gpt-4o-mini", config, embedder=MyEmbedder())
 ```
 
+## MCP Server
+
+grafeo-memory includes a built-in MCP server so AI agents (Claude Desktop, Cursor, etc.) can use it as a tool.
+
+```bash
+uv add grafeo-memory[mcp]
+# or: pip install grafeo-memory[mcp]
+```
+
+### Claude Desktop
+
+Add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "grafeo-memory": {
+      "command": "grafeo-memory-mcp",
+      "env": {
+        "GRAFEO_MEMORY_MODEL": "openai:gpt-4o-mini",
+        "GRAFEO_MEMORY_DB": "./memory.db"
+      }
+    }
+  }
+}
+```
+
+### Available Tools
+
+| Tool | Description |
+| ---- | ----------- |
+| `memory_add` | Add a memory by extracting facts from text |
+| `memory_add_batch` | Add multiple memories in one batch |
+| `memory_search` | Search memories by semantic similarity and graph context |
+| `memory_update` | Update an existing memory's text |
+| `memory_delete` | Delete a single memory |
+| `memory_delete_all` | Delete all memories for a user |
+| `memory_list` | List all stored memories |
+| `memory_summarize` | Consolidate old memories into topic-grouped summaries |
+| `memory_history` | Show change history for a memory |
+
+### Environment Variables
+
+| Variable | Default | Description |
+| -------- | ------- | ----------- |
+| `GRAFEO_MEMORY_MODEL` | `openai:gpt-4o-mini` | pydantic-ai model string |
+| `GRAFEO_MEMORY_DB` | *(in-memory)* | Database file path |
+| `GRAFEO_MEMORY_USER` | `default` | Default user ID |
+| `GRAFEO_MEMORY_YOLO` | *(off)* | Set to `1` for all features |
+
+### Transport
+
+Supports stdio (default), SSE and streamable HTTP:
+
+```bash
+grafeo-memory-mcp              # stdio (default)
+grafeo-memory-mcp sse          # SSE
+grafeo-memory-mcp streamable-http
+```
+
+> **Note:** This is different from [grafeo-mcp](https://github.com/GrafeoDB/grafeo-mcp), which exposes the raw GrafeoDB database. grafeo-memory-mcp wraps the high-level memory API (extract, reconcile, search, summarize).
+
+## Observability
+
+grafeo-memory supports OpenTelemetry instrumentation via pydantic-ai. When enabled, all LLM calls (extraction, reconciliation, summarization, reranking) are traced automatically.
+
+```python
+config = MemoryConfig(instrument=True)  # uses global OTel provider
+```
+
+For custom providers:
+
+```python
+from grafeo_memory import InstrumentationSettings
+
+config = MemoryConfig(instrument=InstrumentationSettings(
+    tracer_provider=my_tracer_provider,
+    include_content=False,
+))
+```
+
 ## Why grafeo-memory?
 
 | | Traditional stack | grafeo-memory |
@@ -205,6 +286,8 @@ Use as a context manager: `with MemoryManager(...) as memory:`. Multiple session
 - `weight_topology`: topology score weight for graph-connected memories (default 0.0, requires `enable_importance`)
 - `enable_topology_boost`: re-rank search results by graph connectivity, no LLM call (default False)
 - `topology_boost_factor`: strength of topology boost (default 0.2)
+- `consolidation_protect_threshold`: protect well-connected memories from summarize (default 0.0, off)
+- `instrument`: OpenTelemetry instrumentation, `True` or `InstrumentationSettings` (default False)
 
 ### `EmbeddingClient` (Protocol)
 
@@ -238,9 +321,10 @@ grafeo-memory is part of the GrafeoDB ecosystem:
 - **[grafeo](https://github.com/GrafeoDB/grafeo)**: Core graph database engine (Rust)
 - **[grafeo-langchain](https://github.com/GrafeoDB/grafeo-langchain)**: LangChain integration
 - **[grafeo-llamaindex](https://github.com/GrafeoDB/grafeo-llamaindex)**: LlamaIndex integration
-- **[grafeo-mcp](https://github.com/GrafeoDB/grafeo-mcp)**: MCP server for AI agents
+- **[grafeo-mcp](https://github.com/GrafeoDB/grafeo-mcp)**: MCP server for raw GrafeoDB access
+- **grafeo-memory-mcp** (built-in): MCP server for the memory API (`uv add grafeo-memory[mcp]` or `pip install grafeo-memory[mcp]`)
 
-All packages share the same `.db` file. Build memories with grafeo-memory, query them with grafeo-langchain, expose them via grafeo-mcp.
+All packages share the same `.db` file. Build memories with grafeo-memory, query them with grafeo-langchain, expose them via MCP.
 
 ## Requirements
 

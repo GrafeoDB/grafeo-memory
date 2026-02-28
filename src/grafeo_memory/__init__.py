@@ -1,5 +1,7 @@
 """grafeo-memory — AI memory layer powered by GrafeoDB."""
 
+from pydantic_ai.models.instrumented import InstrumentationSettings
+
 from .embedding import EmbeddingClient, MistralEmbedder, OpenAIEmbedder
 from .history import HistoryEntry
 from .manager import AsyncMemoryManager, MemoryManager
@@ -35,6 +37,7 @@ __all__ = [
     "FactsOutput",
     "HistoryEntry",
     "ImageContent",
+    "InstrumentationSettings",
     "LLMReranker",
     "MemoryAction",
     "MemoryConfig",
@@ -55,4 +58,4 @@ __all__ = [
     "compute_composite_score",
 ]
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"

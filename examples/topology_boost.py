@@ -9,7 +9,7 @@ For example, "Alice works at Google" connects to both "Alice" and
 rank higher than an isolated memory like "Alice has a dog named Max".
 
 Requires:
-    pip install grafeo-memory[openai]
+    uv add grafeo-memory[openai]
     OPENAI_API_KEY environment variable
 """
 

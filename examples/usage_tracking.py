@@ -5,7 +5,7 @@ grafeo-memory tracks LLM usage across all operations:
 2. Aggregated usage on results via the .usage attribute
 
 Requires:
-    pip install grafeo-memory[openai]
+    uv add grafeo-memory[openai]
     OPENAI_API_KEY environment variable
 """
 
