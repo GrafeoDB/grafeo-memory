@@ -7,6 +7,10 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+import pytest
+
+pytest.importorskip("mcp", reason="mcp package not installed")
+
 from grafeo_memory.history import HistoryEntry
 from grafeo_memory.types import MemoryAction, MemoryEvent, SearchResult
 
