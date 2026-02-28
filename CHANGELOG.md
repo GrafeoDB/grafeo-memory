@@ -5,6 +5,29 @@ All notable changes to grafeo-memory are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-02-28
+
+Episodic memory, built-in MCP server, OpenTelemetry tracing, and topology-aware consolidation.
+
+### Added
+
+- **Episodic memory type**: new `memory_type="episodic"` for interaction events and reasoning context (e.g. "user asked X, found Y"). Dedicated extraction prompts, filterable in `search()` and `get_all()`
+- **Built-in MCP server** (`grafeo-memory-mcp`): 9 tools, 2 resources, 2 prompts exposing the high-level memory API to AI agents (Claude Desktop, Cursor, etc.). Install with `uv add grafeo-memory[mcp]`
+- **OpenTelemetry instrumentation** (opt-in): set `instrument=True` in `MemoryConfig` to trace all LLM calls via pydantic-ai's `Agent.instrument_all()`. Supports custom `InstrumentationSettings` for tracer provider and content filtering
+- **Topology-aware consolidation**: `consolidation_protect_threshold` config option prevents `summarize()` from merging well-connected hub memories. Memories with topology scores above the threshold are preserved
+- New `MemoryConfig` options: `consolidation_protect_threshold`, `instrument`
+- New export: `InstrumentationSettings` from `grafeo_memory`
+- MCP tools: `memory_add`, `memory_add_batch`, `memory_search`, `memory_update`, `memory_delete`, `memory_delete_all`, `memory_list`, `memory_summarize`, `memory_history`
+- MCP resources: `memory://config`, `memory://stats`
+- MCP prompts: `manage_memories`, `knowledge_capture`
+- 18 new tests (episodic memory, tracing, MCP tools)
+
+### Changed
+
+- Dropped Groq from default provider list (Mistral preferred)
+- CI now installs all extras (`uv sync --all-extras`) to cover MCP tests
+- All `pip install` references in docs, examples, and error messages changed to `uv add` (with pip as alternative)
+
 ## [0.1.3] - 2026-02-27
 
 Bug fixes, provenance tracking, and topology-boosted search.
@@ -101,6 +124,7 @@ Initial release.
 - **Windows async compatibility**: persistent `asyncio.Runner` and `ProactorEventLoop` safety net for Python 3.13+
 - 230 tests, 83% coverage
 
+[0.1.4]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.0...v0.1.1
