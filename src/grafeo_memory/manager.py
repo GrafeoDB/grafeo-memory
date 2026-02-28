@@ -65,6 +65,12 @@ class _MemoryCore:
         self._vector_index_ready = False
         self._ensure_indexes()
 
+        # OpenTelemetry: instrument all pydantic-ai agents when enabled
+        if self._config.instrument:
+            from pydantic_ai import Agent
+
+            Agent.instrument_all(self._config.instrument if self._config.instrument is not True else True)
+
     def _ensure_indexes(self) -> None:
         vp = self._config.vector_property
         tp = self._config.text_property
@@ -923,9 +929,7 @@ class _MemoryCore:
             candidate_ids = [mid for mid, _, _ in to_consolidate]
             topo_cache = _batch_topology_scores(self._db, candidate_ids, self._config)
             to_consolidate = [
-                (mid, text, ts)
-                for mid, text, ts in to_consolidate
-                if topo_cache.get(mid, (0.0, 0.0))[0] < threshold
+                (mid, text, ts) for mid, text, ts in to_consolidate if topo_cache.get(mid, (0.0, 0.0))[0] < threshold
             ]
             if not to_consolidate:
                 return AddResult(usage=total)

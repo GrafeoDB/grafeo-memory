@@ -1510,3 +1510,125 @@ class TestProceduralMemory:
         assert len(events) == 1
         assert events[0].memory_type == "procedural"
         manager.close()
+
+
+class TestTopologyAwareConsolidation:
+    """Tests for task 08: summarize() protects well-connected memories."""
+
+    def test_consolidation_protect_threshold_zero_consolidates_all(self):
+        """Default threshold=0.0 consolidates everything (backward compat)."""
+        manager = _make_manager(
+            [
+                # summarize LLM call
+                {"memories": ["consolidated: facts 0-2"]},
+            ],
+            consolidation_protect_threshold=0.0,
+        )
+        # Use infer=False to directly store memories without extraction/reconciliation
+        for i in range(8):
+            manager.add(f"fact {i}", infer=False)
+
+        result = manager.summarize(preserve_recent=5)
+        # With threshold=0, all 3 old memories should be consolidated
+        adds = [e for e in result if e.action == MemoryAction.ADD]
+        deletes = [e for e in result if e.action == MemoryAction.DELETE]
+        assert len(adds) == 1
+        assert len(deletes) == 3
+        manager.close()
+
+    def test_consolidation_protects_connected_memories(self):
+        """Memories with topology score above threshold should be protected from consolidation."""
+        from grafeo_memory.types import ENTITY_LABEL, HAS_ENTITY_EDGE, MEMORY_LABEL
+
+        manager = _make_manager(
+            [
+                # summarize won't need LLM if all candidates are protected
+            ],
+            consolidation_protect_threshold=0.01,  # very low threshold = protect anything with entities
+        )
+
+        # Manually create memories with entities to give them topology scores
+        db = manager._db
+        now_ms = 1000000
+        for i in range(8):
+            props = {
+                "text": f"fact {i}",
+                "user_id": "test_user",
+                "created_at": now_ms + i * 1000,
+                "importance": 1.0,
+                "access_count": 0,
+                "memory_type": "semantic",
+            }
+            node = db.create_node([MEMORY_LABEL], props)
+            # Give each memory an entity to make topology score > 0
+            ent = db.create_node([ENTITY_LABEL], {"name": f"ent_{i}", "entity_type": "thing", "user_id": "test_user"})
+            db.create_edge(node.id, ent.id, HAS_ENTITY_EDGE)
+
+        result = manager.summarize(preserve_recent=5)
+        # All 3 candidates have entities → topology score > 0 > threshold (0.01)
+        # Actually topology_score requires shared entities for the connectivity component,
+        # but even a single entity gives degree > 0, so score > 0
+        # All candidates should be protected, so nothing gets consolidated
+        assert len(result) == 0
+        manager.close()
+
+
+class TestEpisodicMemory:
+    """Tests for task 10: episodic memory type."""
+
+    def test_add_episodic_memory(self):
+        """memory_type='episodic' should be accepted in add()."""
+        fact_text = "user asked about python, found that it supports type hints"
+        manager = _make_manager(
+            [
+                {
+                    "facts": [fact_text],
+                    "entities": [{"name": "python", "entity_type": "language"}],
+                    "relations": [],
+                },
+                {"decisions": [{"action": "add", "text": fact_text}]},
+            ],
+        )
+        events = manager.add("I asked about Python and learned it supports type hints", memory_type="episodic")
+        assert len(events) == 1
+        assert events[0].action == MemoryAction.ADD
+        assert events[0].memory_type == "episodic"
+        manager.close()
+
+    def test_episodic_filterable_in_search(self):
+        """Episodic memories should be filterable in get_all and search."""
+        manager = _make_manager(
+            [
+                # Add semantic
+                {"facts": ["alice likes pizza"], "entities": [], "relations": []},
+                {"decisions": [{"action": "add", "text": "alice likes pizza"}]},
+                # Add episodic
+                {"facts": ["user asked about alice's food, found she likes pizza"], "entities": [], "relations": []},
+                {"decisions": [{"action": "add", "text": "user asked about alice's food, found she likes pizza"}]},
+            ],
+        )
+        manager.add("Alice likes pizza", memory_type="semantic")
+        manager.add("I asked about Alice's food and found she likes pizza", memory_type="episodic")
+
+        all_episodic = manager.get_all(memory_type="episodic")
+        assert len(all_episodic) == 1
+        assert all_episodic[0].memory_type == "episodic"
+
+        all_semantic = manager.get_all(memory_type="semantic")
+        assert len(all_semantic) == 1
+        assert all_semantic[0].memory_type == "semantic"
+
+        all_memories = manager.get_all()
+        assert len(all_memories) == 2
+        manager.close()
+
+    def test_episodic_enum_value(self):
+        """MemoryType.EPISODIC should have value 'episodic'."""
+        assert MemoryType.EPISODIC == "episodic"
+        assert MemoryType.EPISODIC.value == "episodic"
+
+    def test_episodic_backward_compatible(self):
+        """Existing semantic and procedural types should still work."""
+        assert MemoryType.SEMANTIC == "semantic"
+        assert MemoryType.PROCEDURAL == "procedural"
+        assert MemoryType("episodic") == MemoryType.EPISODIC

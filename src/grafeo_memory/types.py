@@ -8,6 +8,7 @@ from enum import Enum, StrEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from pydantic_ai.models.instrumented import InstrumentationSettings
     from pydantic_ai.usage import RunUsage
 
 # Re-export Pydantic schemas from their new home for backward compatibility
@@ -75,6 +76,8 @@ class MemoryConfig:
     topology_boost_factor: float = 0.2
     # Topology-aware consolidation: protect well-connected memories from summarize()
     consolidation_protect_threshold: float = 0.0  # 0.0 = consolidate everything (backward compat)
+    # OpenTelemetry instrumentation (opt-in)
+    instrument: InstrumentationSettings | bool = False
     # Vision / multimodal (opt-in)
     enable_vision: bool = False
     vision_model: object | None = None
@@ -91,6 +94,7 @@ class MemoryConfig:
         defaults: dict = {
             "enable_importance": True,
             "enable_vision": True,
+            "instrument": True,
         }
         defaults.update(kwargs)
 
