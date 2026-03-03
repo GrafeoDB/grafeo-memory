@@ -5,6 +5,30 @@ All notable changes to grafeo-memory are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-03-03
+
+Guardrails and observability: config validation, database introspection, search pipeline tracing, and silent exception fixes.
+
+### Added
+
+- **`MemoryConfig.__post_init__` validation**: rejects invalid config at construction. Range checks on all weights, thresholds, and dimensions. Warns when importance weights do not sum to ~1.0
+- **`manager.stats()`**: returns a `MemoryStats` dataclass with memory counts (total, by type), entity count, relation count, and database info. No LLM calls, pure database reads. Available on both `MemoryManager` and `AsyncMemoryManager`
+- **`manager.explain(query)`**: runs a search and returns an `ExplainResult` with a step-by-step pipeline trace (embedding, hybrid search, entity extraction, graph search, merge, optional boosts). Helps users understand why results rank the way they do
+- **CLI `stats` subcommand**: `grafeo-memory stats` shows memory system statistics (supports `--json`)
+- **CLI `explain` subcommand**: `grafeo-memory explain <query>` traces the full search pipeline (supports `--json`)
+- **MCP `memory_stats` tool**: exposes `stats()` to AI agents
+- **MCP `memory_explain_search` tool**: exposes `explain()` to AI agents
+- New types: `MemoryStats`, `ExplainStep`, `ExplainResult`
+- 40+ new tests (config validation, stats, explain)
+
+### Fixed
+
+- **Silent exception in `scoring.py`**: bare `pass` on access stats update replaced with `logger.debug()` (importance scoring no longer silently loses access counts)
+- **Silent exception in `history.py`**: `get_history()` query failures now logged with `logger.warning()` instead of returning empty list silently
+- **Entity duplication in `manager.py`**: narrowed try-block in `_find_or_create_entity` so property access errors propagate instead of creating duplicate Entity nodes
+- **DERIVED_FROM edge logging**: upgraded from `debug` to `warning` level (lineage loss is now visible)
+- **Usage callback error context**: log message now includes the callback function name for easier debugging
+
 ## [0.1.4] - 2026-02-28
 
 Episodic memory, built-in MCP server, OpenTelemetry tracing, and topology-aware consolidation.

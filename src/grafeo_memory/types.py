@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
@@ -81,6 +82,37 @@ class MemoryConfig:
     # Vision / multimodal (opt-in)
     enable_vision: bool = False
     vision_model: object | None = None
+
+    def __post_init__(self) -> None:
+        if self.embedding_dimensions <= 0:
+            raise ValueError(f"embedding_dimensions must be positive, got {self.embedding_dimensions}")
+        if not (0.0 < self.similarity_threshold <= 1.0):
+            raise ValueError(f"similarity_threshold must be in (0.0, 1.0], got {self.similarity_threshold}")
+        if self.decay_rate <= 0:
+            raise ValueError(f"decay_rate must be positive, got {self.decay_rate}")
+
+        for name in (
+            "weight_similarity",
+            "weight_recency",
+            "weight_frequency",
+            "weight_importance",
+            "weight_topology",
+            "topology_boost_factor",
+            "structural_feedback_gamma",
+            "consolidation_protect_threshold",
+        ):
+            val = getattr(self, name)
+            if not (0.0 <= val <= 1.0):
+                raise ValueError(f"{name} must be in [0.0, 1.0], got {val}")
+
+        weight_sum = self.weight_similarity + self.weight_recency + self.weight_frequency + self.weight_importance
+        if abs(weight_sum - 1.0) > 0.05:
+            warnings.warn(
+                f"Core importance weights sum to {weight_sum:.3f}, expected ~1.0. "
+                f"Composite scores may not behave as expected.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     @classmethod
     def yolo(cls, **kwargs) -> MemoryConfig:
@@ -180,6 +212,36 @@ class ExtractionResult:
     relations: list[Relation] = field(default_factory=list)
 
 
+@dataclass
+class MemoryStats:
+    """Database introspection snapshot."""
+
+    total_memories: int = 0
+    semantic_count: int = 0
+    procedural_count: int = 0
+    episodic_count: int = 0
+    entity_count: int = 0
+    relation_count: int = 0
+    db_info: dict = field(default_factory=dict)
+
+
+@dataclass
+class ExplainStep:
+    """A single stage in the search pipeline trace."""
+
+    name: str
+    detail: dict = field(default_factory=dict)
+
+
+@dataclass
+class ExplainResult:
+    """Full trace of a search pipeline execution."""
+
+    query: str
+    steps: list[ExplainStep] = field(default_factory=list)
+    results: list[SearchResult] = field(default_factory=list)
+
+
 # Graph schema constants
 MEMORY_LABEL = "Memory"
 ENTITY_LABEL = "Entity"
@@ -218,12 +280,15 @@ __all__ = [
     "EntitiesOutput",
     "Entity",
     "EntityItem",
+    "ExplainResult",
+    "ExplainStep",
     "ExtractionResult",
     "Fact",
     "FactsOutput",
     "MemoryAction",
     "MemoryConfig",
     "MemoryEvent",
+    "MemoryStats",
     "MemoryType",
     "ReconciliationDecision",
     "ReconciliationItem",

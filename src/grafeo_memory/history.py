@@ -56,6 +56,11 @@ def get_history(db: object, memory_node_id: int) -> list[HistoryEntry]:
         )
         result = db.execute(query, {"mid": memory_node_id})
     except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "get_history: query failed for memory node %s", memory_node_id, exc_info=True
+        )
         return []
 
     entries: list[HistoryEntry] = []

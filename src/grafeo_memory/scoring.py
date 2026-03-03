@@ -117,7 +117,7 @@ def apply_importance_scoring(
             db.set_node_property(node_id, "access_count", access_count + 1)
             db.set_node_property(node_id, "last_accessed", now_ms)
         except Exception:
-            pass
+            logger.debug("Failed to update access stats for node %s", node_id, exc_info=True)
 
     scored.sort(key=lambda r: r.score, reverse=True)
     return scored

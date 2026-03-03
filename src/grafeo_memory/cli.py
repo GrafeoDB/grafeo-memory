@@ -63,6 +63,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_summarize.add_argument("--preserve-recent", type=int, default=5, help="Keep N most recent (default: 5)")
     p_summarize.add_argument("--batch-size", type=int, default=20, help="Memories per LLM batch (default: 20)")
 
+    # stats
+    sub.add_parser("stats", help="Show memory system statistics")
+
+    # explain
+    p_explain = sub.add_parser("explain", help="Explain a search query step-by-step")
+    p_explain.add_argument("query", help="Search query to explain")
+    p_explain.add_argument("-k", type=int, default=10, help="Number of results (default: 10)")
+    p_explain.add_argument("--type", "-t", dest="memory_type", choices=["semantic", "procedural"])
+
     return parser
 
 
@@ -245,6 +254,45 @@ def _cmd_summarize(manager, args: argparse.Namespace) -> None:
         print(f"\nSummary: {added} consolidated, {deleted} removed.")
 
 
+def _cmd_stats(manager, args: argparse.Namespace) -> None:
+    s = manager.stats()
+    if args.output_json:
+        _print_json(asdict(s))
+        return
+    print("Memory Statistics:")
+    print(f"  Total memories: {s.total_memories}")
+    print(f"    Semantic:   {s.semantic_count}")
+    print(f"    Procedural: {s.procedural_count}")
+    print(f"    Episodic:   {s.episodic_count}")
+    print(f"  Entities:  {s.entity_count}")
+    print(f"  Relations: {s.relation_count}")
+
+
+def _cmd_explain(manager, args: argparse.Namespace) -> None:
+    result = manager.explain(args.query, k=args.k, memory_type=args.memory_type)
+    if args.output_json:
+        _print_json(
+            {
+                "query": result.query,
+                "steps": [asdict(step) for step in result.steps],
+                "results": [_serialize(r) for r in result.results],
+            }
+        )
+        return
+    print(f"Explain: {result.query!r}\n")
+    for step in result.steps:
+        print(f"  [{step.name}]")
+        for k, v in step.detail.items():
+            print(f"    {k}: {v}")
+    print()
+    if result.results:
+        print("  Final results:")
+        for i, r in enumerate(result.results, 1):
+            print(f"    {i}. [{r.score:.3f}] {r.text}  (id: {r.memory_id})")
+    else:
+        print("  No results.")
+
+
 # --- Entry point ---
 
 _COMMANDS = {
@@ -255,6 +303,8 @@ _COMMANDS = {
     "delete": _cmd_delete,
     "history": _cmd_history,
     "summarize": _cmd_summarize,
+    "stats": _cmd_stats,
+    "explain": _cmd_explain,
 }
 
 
