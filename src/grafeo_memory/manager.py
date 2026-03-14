@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -66,6 +67,7 @@ class _MemoryCore:
             self._db = grafeo.GrafeoDB()
 
         self._vector_index_ready = False
+        self._user_locks: dict[str, asyncio.Lock] = {}
         self._ensure_indexes()
 
         # OpenTelemetry: instrument all pydantic-ai agents when enabled
@@ -219,32 +221,36 @@ class _MemoryCore:
 
         # Scope reconciliation to same memory type (only for procedural — semantic skips for backward compat)
         similar_filters = {"memory_type": mtype.value} if mtype != MemoryType.SEMANTIC else None
-        existing = search_similar(
-            self._db,
-            embeddings,
-            user_id=uid,
-            threshold=self._config.reconciliation_threshold,
-            vector_property=self._config.vector_property,
-            filters=similar_filters,
-        )
-        logger.debug("Found %d existing memories for reconciliation", len(existing))
 
-        decisions = await reconcile_async(self._model, extraction.facts, existing, _on_usage=on_usage)
+        # Lock per-user to prevent race conditions between search_similar and reconcile
+        lock = self._user_locks.setdefault(uid, asyncio.Lock())
+        async with lock:
+            existing = search_similar(
+                self._db,
+                embeddings,
+                user_id=uid,
+                threshold=self._config.reconciliation_threshold,
+                vector_property=self._config.vector_property,
+                filters=similar_filters,
+            )
+            logger.debug("Found %d existing memories for reconciliation", len(existing))
 
-        events = await self._execute_decisions(
-            decisions,
-            embeddings,
-            extraction,
-            uid,
-            sid,
-            metadata,
-            now_ms,
-            actor_id,
-            role,
-            importance=importance,
-            memory_type=mtype,
-            _on_usage=on_usage,
-        )
+            decisions = await reconcile_async(self._model, extraction.facts, existing, _on_usage=on_usage)
+
+            events = await self._execute_decisions(
+                decisions,
+                embeddings,
+                extraction,
+                uid,
+                sid,
+                metadata,
+                now_ms,
+                actor_id,
+                role,
+                importance=importance,
+                memory_type=mtype,
+                _on_usage=on_usage,
+            )
         return AddResult(events, usage=total)
 
     async def _add_batch(
