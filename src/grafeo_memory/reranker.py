@@ -113,6 +113,7 @@ class LLMReranker:
                     relations=r.relations,
                     actor_id=r.actor_id,
                     role=r.role,
+                    source=r.source,
                 )
             )
 

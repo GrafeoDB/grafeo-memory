@@ -24,7 +24,7 @@ def test_memory_config_defaults():
     assert config.db_path is None
     assert config.user_id == "default"
     assert config.session_id is None
-    assert config.similarity_threshold == 0.7
+    assert config.reconciliation_threshold == 0.3
     assert config.embedding_dimensions == 1536
 
 

@@ -136,6 +136,7 @@ def graph_search(
                             user_id=user_id,
                             relations=relations if relations else None,
                             memory_type=mem_props.get("memory_type", "semantic"),
+                            source="graph",
                         )
                     )
             except Exception:

@@ -280,7 +280,9 @@ Use as a context manager: `with MemoryManager(...) as memory:`. Multiple session
 - `user_id`: default user scope (default `"default"`)
 - `session_id`: default session scope
 - `agent_id`: default agent scope
-- `similarity_threshold`: max embedding distance for reconciliation (default 0.7)
+- `reconciliation_threshold`: minimum similarity for reconciliation candidates (default 0.3)
+- `search_min_score`: minimum score for search results, 0.0 returns everything (default 0.0)
+- `agreement_bonus`: score boost when both vector and graph find the same memory (default 0.1)
 - `embedding_dimensions`: vector dimensions (default 1536)
 - `enable_importance`: enable composite scoring with recency/frequency/importance (default False)
 - `weight_topology`: topology score weight for graph-connected memories (default 0.0, requires `enable_importance`)

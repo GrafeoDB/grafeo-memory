@@ -12,12 +12,15 @@ from .types import (
     AddResult,
     EntitiesOutput,
     Entity,
+    ExplainResult,
+    ExplainStep,
     ExtractionResult,
     Fact,
     FactsOutput,
     MemoryAction,
     MemoryConfig,
     MemoryEvent,
+    MemoryStats,
     MemoryType,
     ReconciliationOutput,
     Relation,
@@ -32,6 +35,8 @@ __all__ = [
     "EmbeddingClient",
     "EntitiesOutput",
     "Entity",
+    "ExplainResult",
+    "ExplainStep",
     "ExtractionResult",
     "Fact",
     "FactsOutput",
@@ -43,6 +48,7 @@ __all__ = [
     "MemoryConfig",
     "MemoryEvent",
     "MemoryManager",
+    "MemoryStats",
     "MemoryType",
     "Message",
     "MistralEmbedder",
@@ -58,4 +64,4 @@ __all__ = [
     "compute_composite_score",
 ]
 
-__version__ = "0.1.4"
+__version__ = "0.1.6"

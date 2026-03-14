@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -22,10 +23,13 @@ from .types import (
     RELATION_EDGE,
     AddResult,
     Entity,
+    ExplainResult,
+    ExplainStep,
     ExtractionResult,
     MemoryAction,
     MemoryConfig,
     MemoryEvent,
+    MemoryStats,
     MemoryType,
     ReconciliationDecision,
     SearchResponse,
@@ -63,6 +67,7 @@ class _MemoryCore:
             self._db = grafeo.GrafeoDB()
 
         self._vector_index_ready = False
+        self._user_locks: dict[str, asyncio.Lock] = {}
         self._ensure_indexes()
 
         # OpenTelemetry: instrument all pydantic-ai agents when enabled
@@ -144,7 +149,8 @@ class _MemoryCore:
                 try:
                     cb(operation, usage)
                 except Exception:
-                    logger.warning("Usage callback failed for '%s'", operation, exc_info=True)
+                    cb_name = getattr(cb, "__name__", repr(cb))
+                    logger.warning("Usage callback %s failed for '%s'", cb_name, operation, exc_info=True)
 
         return collector, total
 
@@ -215,32 +221,36 @@ class _MemoryCore:
 
         # Scope reconciliation to same memory type (only for procedural — semantic skips for backward compat)
         similar_filters = {"memory_type": mtype.value} if mtype != MemoryType.SEMANTIC else None
-        existing = search_similar(
-            self._db,
-            embeddings,
-            user_id=uid,
-            threshold=self._config.similarity_threshold,
-            vector_property=self._config.vector_property,
-            filters=similar_filters,
-        )
-        logger.debug("Found %d existing memories for reconciliation", len(existing))
 
-        decisions = await reconcile_async(self._model, extraction.facts, existing, _on_usage=on_usage)
+        # Lock per-user to prevent race conditions between search_similar and reconcile
+        lock = self._user_locks.setdefault(uid, asyncio.Lock())
+        async with lock:
+            existing = search_similar(
+                self._db,
+                embeddings,
+                user_id=uid,
+                threshold=self._config.reconciliation_threshold,
+                vector_property=self._config.vector_property,
+                filters=similar_filters,
+            )
+            logger.debug("Found %d existing memories for reconciliation", len(existing))
 
-        events = await self._execute_decisions(
-            decisions,
-            embeddings,
-            extraction,
-            uid,
-            sid,
-            metadata,
-            now_ms,
-            actor_id,
-            role,
-            importance=importance,
-            memory_type=mtype,
-            _on_usage=on_usage,
-        )
+            decisions = await reconcile_async(self._model, extraction.facts, existing, _on_usage=on_usage)
+
+            events = await self._execute_decisions(
+                decisions,
+                embeddings,
+                extraction,
+                uid,
+                sid,
+                metadata,
+                now_ms,
+                actor_id,
+                role,
+                importance=importance,
+                memory_type=mtype,
+                _on_usage=on_usage,
+            )
         return AddResult(events, usage=total)
 
     async def _add_batch(
@@ -401,6 +411,8 @@ class _MemoryCore:
         filters: dict | None = None,
         rerank: bool = True,
         memory_type: MemoryType | str | None = None,
+        min_score: float | None = None,
+        _trace: list[ExplainStep] | None = None,
     ) -> SearchResponse:
         on_usage, total = self._make_usage_collector()
         uid = user_id or self._config.user_id
@@ -412,6 +424,9 @@ class _MemoryCore:
 
         # Embed query once, share across both search paths
         query_embedding = self._embedder.embed([query])[0]
+
+        if _trace is not None:
+            _trace.append(ExplainStep(name="embed_query", detail={"dimensions": len(query_embedding)}))
 
         vector_results = hybrid_search(
             self._db,
@@ -425,6 +440,17 @@ class _MemoryCore:
             query_embedding=query_embedding,
         )
 
+        if _trace is not None:
+            _trace.append(
+                ExplainStep(
+                    name="hybrid_search",
+                    detail={
+                        "candidates": len(vector_results),
+                        "top_scores": [round(r.score, 4) for r in vector_results[:5]],
+                    },
+                )
+            )
+
         # Extract entities asynchronously to avoid nested run_sync() deadlock
         # when graph_search is called from within this async context.
         from .extraction.entities import extract_entities_async
@@ -435,6 +461,14 @@ class _MemoryCore:
         except Exception:
             logger.warning("_search: entity extraction failed for query=%r", query, exc_info=True)
             entities = []
+
+        if _trace is not None:
+            _trace.append(
+                ExplainStep(
+                    name="entity_extraction",
+                    detail={"entities": [e.name for e in entities]},
+                )
+            )
 
         graph_results = graph_search(
             self._db,
@@ -454,33 +488,128 @@ class _MemoryCore:
             mtype_val = MemoryType(memory_type).value if isinstance(memory_type, str) else memory_type.value
             graph_results = [r for r in graph_results if (r.memory_type or "semantic") == mtype_val]
 
-        # Merge and deduplicate (keep highest score per memory)
-        all_results = vector_results + graph_results
+        if _trace is not None:
+            _trace.append(
+                ExplainStep(
+                    name="graph_search",
+                    detail={
+                        "candidates": len(graph_results),
+                        "top_scores": [round(r.score, 4) for r in graph_results[:5]],
+                    },
+                )
+            )
+
+        # Merge and deduplicate with agreement bonus
+        vector_map = {r.memory_id: r for r in vector_results}
+        graph_map = {r.memory_id: r for r in graph_results}
+        all_ids = set(vector_map) | set(graph_map)
+        bonus = self._config.agreement_bonus
+        agreement_count = 0
         seen: dict[str, SearchResult] = {}
-        for r in all_results:
-            if r.memory_id not in seen or r.score > seen[r.memory_id].score:
-                seen[r.memory_id] = r
+        for mid in all_ids:
+            v = vector_map.get(mid)
+            g = graph_map.get(mid)
+            if v and g:
+                agreement_count += 1
+                best = v if v.score >= g.score else g
+                score = best.score * (1.0 + bonus)
+                seen[mid] = SearchResult(
+                    memory_id=best.memory_id,
+                    text=best.text,
+                    score=score,
+                    user_id=best.user_id,
+                    metadata=best.metadata,
+                    relations=best.relations,
+                    actor_id=best.actor_id,
+                    role=best.role,
+                    importance=best.importance,
+                    access_count=best.access_count,
+                    memory_type=best.memory_type,
+                    source="both",
+                )
+            elif v:
+                seen[mid] = v
+            else:
+                seen[mid] = g  # type: ignore[assignment]
 
         final = sorted(seen.values(), key=lambda r: r.score, reverse=True)
+
+        if _trace is not None:
+            _trace.append(
+                ExplainStep(
+                    name="merge",
+                    detail={
+                        "vector_count": len(vector_results),
+                        "graph_count": len(graph_results),
+                        "after_dedup": len(final),
+                        "agreement_count": agreement_count,
+                    },
+                )
+            )
 
         # Topology boost: lightweight structural re-ranking (no LLM call)
         if self._config.enable_topology_boost:
             from .scoring import apply_topology_boost
 
             final = apply_topology_boost(final, self._db, self._config)
+            if _trace is not None:
+                _trace.append(ExplainStep(name="topology_boost", detail={"applied": True}))
 
         if rerank and self._reranker is not None:
             if hasattr(self._reranker, "rerank_async"):
                 final = await self._reranker.rerank_async(query, final, top_k=k, _on_usage=on_usage)
             else:
                 final = self._reranker.rerank(query, final, top_k=k, _on_usage=on_usage)
+            if _trace is not None:
+                _trace.append(ExplainStep(name="rerank", detail={"applied": True}))
 
         if self._config.enable_importance:
             from .scoring import apply_importance_scoring
 
             final = apply_importance_scoring(final, self._db, self._config)
+            if _trace is not None:
+                _trace.append(ExplainStep(name="importance_scoring", detail={"applied": True}))
+
+        # Min-score filtering: drop results below threshold
+        effective_min = min_score if min_score is not None else self._config.search_min_score
+        if effective_min > 0:
+            before_filter = len(final)
+            final = [r for r in final if r.score >= effective_min]
+            if _trace is not None:
+                _trace.append(
+                    ExplainStep(
+                        name="min_score_filter",
+                        detail={"threshold": effective_min, "before": before_filter, "after": len(final)},
+                    )
+                )
 
         return SearchResponse(final[:k], usage=total)
+
+    async def _explain(
+        self,
+        query: str,
+        user_id: str | None = None,
+        k: int = 10,
+        *,
+        memory_type: MemoryType | str | None = None,
+    ) -> ExplainResult:
+        """Run a search with full pipeline tracing."""
+        trace: list[ExplainStep] = []
+        response = await self._search(query, user_id=user_id, k=k, memory_type=memory_type, _trace=trace)
+
+        trace.append(
+            ExplainStep(
+                name="final",
+                detail={
+                    "count": len(response),
+                    "top_results": [
+                        {"id": r.memory_id, "score": round(r.score, 4), "text": r.text[:80]} for r in response[:5]
+                    ],
+                },
+            )
+        )
+
+        return ExplainResult(query=query, steps=trace, results=list(response))
 
     async def _update(self, memory_id: str, text: str) -> MemoryEvent:
         """Update a memory's text directly. Re-embeds and records history."""
@@ -687,6 +816,8 @@ class _MemoryCore:
         node_id = node.id if hasattr(node, "id") else node
 
         if embedding is not None:
+            if self._embedding_dims and len(embedding) != self._embedding_dims:
+                raise ValueError(f"Embedding dimension mismatch: got {len(embedding)}, expected {self._embedding_dims}")
             self._db.set_node_property(node_id, self._config.vector_property, embedding)
             self._ensure_vector_index()
 
@@ -771,16 +902,18 @@ class _MemoryCore:
     def _find_or_create_entity(self, entity: Entity, user_id: str) -> int:
         try:
             nodes = self._db.find_nodes_by_property("name", entity.name)
-            for nid in nodes:
-                node = self._db.get_node(nid)
-                if node is None:
-                    continue
-                props = _get_props(node)
-                labels = node.labels if hasattr(node, "labels") else []
-                if ENTITY_LABEL in labels and props.get("user_id") == user_id:
-                    return nid
         except Exception:
             logger.warning("_find_or_create_entity: lookup failed for %r", entity.name, exc_info=True)
+            nodes = []
+
+        for nid in nodes:
+            node = self._db.get_node(nid)
+            if node is None:
+                continue
+            props = _get_props(node)
+            labels = node.labels if hasattr(node, "labels") else []
+            if ENTITY_LABEL in labels and props.get("user_id") == user_id:
+                return nid
 
         node = self._db.create_node(
             [ENTITY_LABEL],
@@ -819,7 +952,12 @@ class _MemoryCore:
                         }
                     )
             except Exception:
-                logger.warning("_get_existing_relations: query failed for nid=%s", nid, exc_info=True)
+                logger.warning(
+                    "_get_existing_relations: query failed for entity nid=%s (%d entities total)",
+                    nid,
+                    len(entity_ids),
+                    exc_info=True,
+                )
                 continue
 
         return relations
@@ -966,7 +1104,7 @@ class _MemoryCore:
                     try:
                         self._db.create_edge(new_mid, int(mid), DERIVED_FROM_EDGE)
                     except Exception:
-                        logger.debug("Failed to create DERIVED_FROM edge %d->%s", new_mid, mid, exc_info=True)
+                        logger.warning("Failed to create DERIVED_FROM edge %d->%s", new_mid, mid, exc_info=True)
 
             # Delete originals (record history before deletion)
             for mid, old_text, _ in batch:
@@ -984,6 +1122,60 @@ class _MemoryCore:
             return []
 
         return get_history(self._db, node_id)
+
+    def _stats_impl(self) -> MemoryStats:
+        """Collect database introspection statistics."""
+        try:
+            memory_nodes = self._db.get_nodes_by_label(MEMORY_LABEL)
+        except Exception:
+            memory_nodes = []
+
+        semantic = 0
+        procedural = 0
+        episodic = 0
+        for item in memory_nodes:
+            # get_nodes_by_label returns list of (id, props_dict) tuples
+            props = item[1] if isinstance(item, tuple) else _get_props(item)
+            mtype = props.get("memory_type", "semantic")
+            if mtype == "procedural":
+                procedural += 1
+            elif mtype == "episodic":
+                episodic += 1
+            else:
+                semantic += 1
+
+        try:
+            entity_nodes = self._db.get_nodes_by_label(ENTITY_LABEL)
+            entity_count = len(entity_nodes)
+        except Exception:
+            entity_count = 0
+
+        relation_count = 0
+        try:
+            rows = self._db.execute(
+                f"MATCH (:{ENTITY_LABEL})-[r:{RELATION_EDGE}]->(:{ENTITY_LABEL}) RETURN count(r)", {}
+            )
+            for row in rows:
+                vals = list(row.values()) if isinstance(row, dict) else [row]
+                relation_count = int(vals[0]) if vals else 0
+        except Exception:
+            pass
+
+        try:
+            db_info = self._db.info()
+        except Exception:
+            db_info = {}
+
+        total = semantic + procedural + episodic
+        return MemoryStats(
+            total_memories=total,
+            semantic_count=semantic,
+            procedural_count=procedural,
+            episodic_count=episodic,
+            entity_count=entity_count,
+            relation_count=relation_count,
+            db_info=db_info if isinstance(db_info, dict) else {},
+        )
 
     def _set_importance_impl(self, memory_id: str, importance: float) -> bool:
         """Set the base importance score for a memory."""
@@ -1107,10 +1299,19 @@ class MemoryManager(_MemoryCore):
         filters: dict | None = None,
         rerank: bool = True,
         memory_type: MemoryType | str | None = None,
+        min_score: float | None = None,
     ) -> SearchResponse:
         """Search memories by semantic similarity and graph context."""
         return run_sync(
-            self._search(query, user_id=user_id, k=k, filters=filters, rerank=rerank, memory_type=memory_type)
+            self._search(
+                query,
+                user_id=user_id,
+                k=k,
+                filters=filters,
+                rerank=rerank,
+                memory_type=memory_type,
+                min_score=min_score,
+            )
         )
 
     def update(self, memory_id: str, text: str) -> MemoryEvent:
@@ -1164,6 +1365,21 @@ class MemoryManager(_MemoryCore):
     def history(self, memory_id: str) -> list[HistoryEntry]:
         """Get the change history for a memory."""
         return self._history_impl(memory_id)
+
+    def stats(self) -> MemoryStats:
+        """Return database introspection statistics (no LLM calls)."""
+        return self._stats_impl()
+
+    def explain(
+        self,
+        query: str,
+        user_id: str | None = None,
+        k: int = 10,
+        *,
+        memory_type: MemoryType | str | None = None,
+    ) -> ExplainResult:
+        """Run a search and return a step-by-step pipeline trace."""
+        return run_sync(self._explain(query, user_id=user_id, k=k, memory_type=memory_type))
 
 
 class AsyncMemoryManager(_MemoryCore):
@@ -1241,6 +1457,7 @@ class AsyncMemoryManager(_MemoryCore):
         filters: dict | None = None,
         rerank: bool = True,
         memory_type: MemoryType | str | None = None,
+        min_score: float | None = None,
     ) -> SearchResponse:
         """Search memories by semantic similarity and graph context."""
         return await self._search(
@@ -1250,6 +1467,7 @@ class AsyncMemoryManager(_MemoryCore):
             filters=filters,
             rerank=rerank,
             memory_type=memory_type,
+            min_score=min_score,
         )
 
     async def update(self, memory_id: str, text: str) -> MemoryEvent:
@@ -1296,3 +1514,18 @@ class AsyncMemoryManager(_MemoryCore):
     async def history(self, memory_id: str) -> list[HistoryEntry]:
         """Get the change history for a memory."""
         return self._history_impl(memory_id)
+
+    def stats(self) -> MemoryStats:
+        """Return database introspection statistics (no LLM calls)."""
+        return self._stats_impl()
+
+    async def explain(
+        self,
+        query: str,
+        user_id: str | None = None,
+        k: int = 10,
+        *,
+        memory_type: MemoryType | str | None = None,
+    ) -> ExplainResult:
+        """Run a search and return a step-by-step pipeline trace."""
+        return await self._explain(query, user_id=user_id, k=k, memory_type=memory_type)

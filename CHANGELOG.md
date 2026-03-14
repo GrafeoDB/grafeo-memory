@@ -5,6 +5,52 @@ All notable changes to grafeo-memory are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-03-14
+
+Search quality: result provenance, score filtering, cross-source agreement bonus, threshold semantics fix, and concurrency safety.
+
+### Added
+
+- **Search result provenance**: `SearchResult.source` field tracks where each result came from: `"vector"`, `"graph"`, `"both"`, or `None` (for `get_all()`). Preserved through scoring, reranking, and topology boost stages
+- **Minimum score filtering**: `search_min_score` config option (default 0.0) and `min_score` parameter on `search()` filter out low-quality results. Per-call parameter overrides the config default
+- **Agreement bonus**: `agreement_bonus` config option (default 0.1) gives a 10% score boost when both vector and graph search find the same memory, rewarding cross-source agreement
+- **Embedding dimension validation**: `_create_memory()` now raises `ValueError` when embedding dimensions don't match the vector index, catching model mismatches at write time instead of producing silent search corruption
+- **Per-user locking**: `asyncio.Lock` per user_id serializes the search-reconcile-store critical section in `add()`, preventing race conditions from concurrent calls
+- **CLI `--min-score`**: search subcommand accepts `--min-score` threshold
+- **MCP `min_score`**: `memory_search` tool accepts optional `min_score` parameter
+- 21 new tests (search provenance, min-score filtering, agreement bonus, threshold semantics, dimension validation, locking)
+
+### Changed
+
+- **BREAKING: `similarity_threshold` renamed to `reconciliation_threshold`** with corrected semantics: now means minimum similarity (0.0-1.0), not maximum distance. Default changed from 0.7 to 0.3 (same effective behavior: old `distance <= 0.7` equals `similarity >= 0.3`)
+- Search merge now uses agreement-aware dedup instead of naive max-score dedup. The `explain()` trace includes `agreement_count` in the merge step
+- `search_similar()` threshold parameter now uses similarity semantics (higher = stricter) instead of distance semantics
+- 330 tests passing, 79% coverage
+
+## [0.1.5] - 2026-03-03
+
+Guardrails and observability: config validation, database introspection, search pipeline tracing, and silent exception fixes.
+
+### Added
+
+- **`MemoryConfig.__post_init__` validation**: rejects invalid config at construction. Range checks on all weights, thresholds, and dimensions. Warns when importance weights do not sum to ~1.0
+- **`manager.stats()`**: returns a `MemoryStats` dataclass with memory counts (total, by type), entity count, relation count, and database info. No LLM calls, pure database reads. Available on both `MemoryManager` and `AsyncMemoryManager`
+- **`manager.explain(query)`**: runs a search and returns an `ExplainResult` with a step-by-step pipeline trace (embedding, hybrid search, entity extraction, graph search, merge, optional boosts). Helps users understand why results rank the way they do
+- **CLI `stats` subcommand**: `grafeo-memory stats` shows memory system statistics (supports `--json`)
+- **CLI `explain` subcommand**: `grafeo-memory explain <query>` traces the full search pipeline (supports `--json`)
+- **MCP `memory_stats` tool**: exposes `stats()` to AI agents
+- **MCP `memory_explain_search` tool**: exposes `explain()` to AI agents
+- New types: `MemoryStats`, `ExplainStep`, `ExplainResult`
+- 40+ new tests (config validation, stats, explain)
+
+### Fixed
+
+- **Silent exception in `scoring.py`**: bare `pass` on access stats update replaced with `logger.debug()` (importance scoring no longer silently loses access counts)
+- **Silent exception in `history.py`**: `get_history()` query failures now logged with `logger.warning()` instead of returning empty list silently
+- **Entity duplication in `manager.py`**: narrowed try-block in `_find_or_create_entity` so property access errors propagate instead of creating duplicate Entity nodes
+- **DERIVED_FROM edge logging**: upgraded from `debug` to `warning` level (lineage loss is now visible)
+- **Usage callback error context**: log message now includes the callback function name for easier debugging
+
 ## [0.1.4] - 2026-02-28
 
 Episodic memory, built-in MCP server, OpenTelemetry tracing, and topology-aware consolidation.
@@ -124,6 +170,8 @@ Initial release.
 - **Windows async compatibility**: persistent `asyncio.Runner` and `ProactorEventLoop` safety net for Python 3.13+
 - 230 tests, 83% coverage
 
+[0.1.6]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.5...v0.1.6
+[0.1.5]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.1...v0.1.2

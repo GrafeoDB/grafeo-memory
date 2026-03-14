@@ -103,6 +103,7 @@ async def memory_search(
     user_id: str | None = None,
     k: int = 10,
     memory_type: str | None = None,
+    min_score: float | None = None,
     ctx: Context[ServerSession, AppContext] | None = None,
 ) -> str:
     """Search memories using hybrid vector similarity and graph context.
@@ -117,6 +118,7 @@ async def memory_search(
         user_id: Search memories for this user. Uses server default if omitted.
         k: Maximum number of results to return (default 10).
         memory_type: Filter by type: "semantic", "procedural", "episodic", or null for all.
+        min_score: Minimum score threshold (0.0-1.0). Results below this are excluded.
 
     Returns:
         JSON with results list (each with memory_id, text, score, metadata).
@@ -128,7 +130,7 @@ async def memory_search(
     assert ctx is not None
     manager = ctx.request_context.lifespan_context.manager
     try:
-        results = await manager.search(query, user_id=user_id, k=k, memory_type=memory_type)
+        results = await manager.search(query, user_id=user_id, k=k, memory_type=memory_type, min_score=min_score)
         return json.dumps({"results": [_serialize(r) for r in results]}, default=str)
     except Exception as exc:
         return json.dumps({"error": str(exc)})
@@ -312,5 +314,71 @@ async def memory_history(
     try:
         entries = await manager.history(memory_id)
         return json.dumps({"history": [_serialize(e) for e in entries]}, default=str)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def memory_stats(
+    ctx: Context[ServerSession, AppContext] | None = None,
+) -> str:
+    """Show memory system statistics: counts, type breakdown, database info.
+
+    Use this tool when: you want to check the health or size of the memory store.
+
+    Returns:
+        JSON with total_memories, semantic_count, procedural_count, episodic_count,
+        entity_count, relation_count, and db_info.
+
+    Examples:
+        memory_stats()
+    """
+    assert ctx is not None
+    manager = ctx.request_context.lifespan_context.manager
+    try:
+        s = manager.stats()
+        return json.dumps(asdict(s), default=str)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def memory_explain_search(
+    query: str,
+    user_id: str | None = None,
+    k: int = 10,
+    memory_type: str | None = None,
+    ctx: Context[ServerSession, AppContext] | None = None,
+) -> str:
+    """Explain a search query step-by-step, showing the full pipeline trace.
+
+    Use this tool when: you want to understand why certain memories ranked
+    higher or lower, or to debug search quality.
+    Do NOT use this for: regular searching (use memory_search).
+
+    Args:
+        query: Natural language search query to explain.
+        user_id: Search memories for this user. Uses server default if omitted.
+        k: Maximum number of results (default 10).
+        memory_type: Filter by type: "semantic", "procedural", "episodic", or null for all.
+
+    Returns:
+        JSON with query, steps (pipeline trace), and results.
+
+    Examples:
+        memory_explain_search("What does Alice do for work?")
+    """
+    assert ctx is not None
+    manager = ctx.request_context.lifespan_context.manager
+    try:
+        result = await manager.explain(query, user_id=user_id, k=k, memory_type=memory_type)
+        return json.dumps(
+            {
+                "query": result.query,
+                "steps": [asdict(step) for step in result.steps],
+                "results": [_serialize(r) for r in result.results],
+            },
+            default=str,
+        )
     except Exception as exc:
         return json.dumps({"error": str(exc)})

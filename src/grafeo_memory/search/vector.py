@@ -60,6 +60,7 @@ def vector_search(
                 metadata=_parse_metadata(props.get("metadata")),
                 relations=relations if relations else None,
                 memory_type=props.get("memory_type", "semantic"),
+                source="vector",
             )
         )
 
@@ -163,6 +164,7 @@ def hybrid_search(
                 actor_id=props.get("actor_id"),
                 role=props.get("role"),
                 memory_type=props.get("memory_type", "semantic"),
+                source="vector",
             )
         )
 
@@ -175,7 +177,7 @@ def search_similar(
     embeddings: list[list[float]],
     *,
     user_id: str,
-    threshold: float = 0.7,
+    threshold: float = 0.3,
     vector_property: str = "embedding",
     filters: dict | None = None,
 ) -> list[dict]:
@@ -183,6 +185,10 @@ def search_similar(
 
     Returns a deduplicated list of dicts: {id, text, score}.
     Used during add() to find candidates for reconciliation.
+
+    Args:
+        threshold: Minimum similarity score (0.0-1.0). Candidates below
+            this similarity are excluded from reconciliation.
     """
     seen: set[int] = set()
     results: list[dict] = []
@@ -202,15 +208,15 @@ def search_similar(
         for node_id, distance in hits:
             if node_id in seen:
                 continue
-            if float(distance) > threshold:
-                continue  # distance — lower is more similar
+            similarity = max(0.0, 1.0 - float(distance))
+            if similarity < threshold:
+                continue  # below minimum similarity
             seen.add(node_id)
 
             node = db.get_node(node_id)
             if node is None:
                 continue
             props = _get_props(node)
-            similarity = max(0.0, 1.0 - float(distance))
             results.append(
                 {
                     "id": str(node_id),
