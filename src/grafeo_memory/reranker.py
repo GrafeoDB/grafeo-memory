@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 
 from ._compat import run_sync
-from .types import SearchResult
+from .types import ModelType, SearchResult
 
 if TYPE_CHECKING:
     from pydantic_ai.usage import RunUsage
@@ -58,7 +58,7 @@ class LLMReranker:
         reranked = reranker.rerank("hobbies", results, top_k=5)
     """
 
-    def __init__(self, model: object, *, prompt: str | None = None):
+    def __init__(self, model: ModelType, *, prompt: str | None = None):
         self._model = model
         self._prompt = prompt or DEFAULT_RERANK_PROMPT
 
@@ -85,13 +85,14 @@ class LLMReranker:
         if not results:
             return []
 
-        agent = Agent(self._model, system_prompt=self._prompt, output_type=RelevanceScore)
+        agent: Agent = Agent(self._model, system_prompt=self._prompt, output_type=RelevanceScore)
 
         scored: list[tuple[float, SearchResult]] = []
         for r in results:
             try:
                 result = await agent.run(RERANK_USER_PROMPT.format(query=query, memory=r.text))
-                score = max(0.0, min(1.0, result.output.score))
+                output: RelevanceScore = result.output  # ty: ignore[invalid-assignment]
+                score = max(0.0, min(1.0, output.score))
                 if _on_usage is not None:
                     _on_usage("rerank", result.usage())
             except Exception:

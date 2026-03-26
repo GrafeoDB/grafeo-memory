@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from ..extraction import extract_entities
-from ..types import ENTITY_LABEL, HAS_ENTITY_EDGE, MEMORY_LABEL, RELATION_EDGE, Fact, SearchResult
+from ..types import ENTITY_LABEL, HAS_ENTITY_EDGE, MEMORY_LABEL, RELATION_EDGE, Fact, ModelType, SearchResult
 from .vector import _get_node_relations, _get_props
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from pydantic_ai.usage import RunUsage
 
     from ..embedding import EmbeddingClient
+    from ..protocol import GrafeoDBProtocol
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -31,8 +32,8 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 def graph_search(
-    db: object,
-    model: object,
+    db: GrafeoDBProtocol,
+    model: ModelType,
     query: str,
     *,
     user_id: str,

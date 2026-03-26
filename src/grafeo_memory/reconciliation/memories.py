@@ -14,20 +14,22 @@ from ..schemas import ReconciliationOutput
 from ..types import (
     Fact,
     MemoryAction,
+    ModelType,
     ReconciliationDecision,
 )
 
 if TYPE_CHECKING:
+    from pydantic_ai.result import AgentRunResult
     from pydantic_ai.usage import RunUsage
 
 logger = logging.getLogger(__name__)
 
 
-def _make_agent(model: object) -> Agent[None, ReconciliationOutput]:
+def _make_agent(model: ModelType) -> Agent:
     return Agent(model, system_prompt=RECONCILIATION_SYSTEM, output_type=ReconciliationOutput)
 
 
-def _parse(result: object, new_facts: list[Fact]) -> list[ReconciliationDecision]:
+def _parse(result: AgentRunResult[ReconciliationOutput], new_facts: list[Fact]) -> list[ReconciliationDecision]:
     decisions: list[ReconciliationDecision] = []
     for raw in result.output.decisions:
         action_str = raw.action.upper()
@@ -64,7 +66,7 @@ def _fast_path_add(new_facts: list[Fact]) -> list[ReconciliationDecision]:
 
 
 async def reconcile_async(
-    model: object,
+    model: ModelType,
     new_facts: list[Fact],
     existing_memories: list[dict],
     *,
@@ -103,11 +105,11 @@ async def reconcile_async(
 
     if _on_usage is not None:
         _on_usage("reconcile", result.usage())
-    return _parse(result, new_facts)
+    return _parse(result, new_facts)  # ty: ignore[invalid-argument-type]
 
 
 def reconcile(
-    model: object,
+    model: ModelType,
     new_facts: list[Fact],
     existing_memories: list[dict],
     *,

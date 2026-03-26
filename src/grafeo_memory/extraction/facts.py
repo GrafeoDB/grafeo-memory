@@ -11,24 +11,25 @@ from pydantic_ai import Agent
 from .._compat import run_sync
 from ..prompts import FACT_EXTRACTION_SYSTEM, FACT_EXTRACTION_USER
 from ..schemas import FactsOutput
-from ..types import Fact
+from ..types import Fact, ModelType
 
 if TYPE_CHECKING:
+    from pydantic_ai.result import AgentRunResult
     from pydantic_ai.usage import RunUsage
 
 logger = logging.getLogger(__name__)
 
 
-def _make_agent(model: object, system_prompt: str | None = None) -> Agent[None, FactsOutput]:
+def _make_agent(model: ModelType, system_prompt: str | None = None) -> Agent:
     return Agent(model, system_prompt=system_prompt or FACT_EXTRACTION_SYSTEM, output_type=FactsOutput)
 
 
-def _parse(result: object) -> list[Fact]:
+def _parse(result: AgentRunResult[FactsOutput]) -> list[Fact]:
     return [Fact(text=f) for f in result.output.facts if f]
 
 
 async def extract_facts_async(
-    model: object,
+    model: ModelType,
     text: str,
     user_id: str,
     *,
@@ -48,11 +49,11 @@ async def extract_facts_async(
         return []
     if _on_usage is not None:
         _on_usage("extract_facts", result.usage())
-    return _parse(result)
+    return _parse(result)  # ty: ignore[invalid-argument-type]
 
 
 def extract_facts(
-    model: object,
+    model: ModelType,
     text: str,
     user_id: str,
     *,

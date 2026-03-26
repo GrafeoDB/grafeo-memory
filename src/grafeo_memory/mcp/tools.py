@@ -91,7 +91,7 @@ async def memory_add_batch(
     assert ctx is not None
     manager = ctx.request_context.lifespan_context.manager
     try:
-        events = await manager.add_batch(texts, user_id=user_id, memory_type=memory_type, infer=infer)
+        events = await manager.add_batch(texts, user_id=user_id, memory_type=memory_type, infer=infer)  # ty: ignore[invalid-argument-type]
         return json.dumps({"events": [_serialize(e) for e in events]}, default=str)
     except Exception as exc:
         return json.dumps({"error": str(exc)})

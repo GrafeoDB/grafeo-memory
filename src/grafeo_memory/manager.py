@@ -13,6 +13,7 @@ from .embedding import EmbeddingClient
 from .extraction import extract_async
 from .history import HistoryEntry, get_history, record_history
 from .messages import Message, parse_messages
+from .protocol import GrafeoDBProtocol
 from .reconciliation import reconcile_async, reconcile_relations_async
 from .search import graph_search, hybrid_search, search_similar
 from .search.vector import _get_props, _parse_metadata
@@ -34,6 +35,7 @@ from .types import (
     MemoryEvent,
     MemoryStats,
     MemoryType,
+    ModelType,
     ReconciliationDecision,
     SearchResponse,
     SearchResult,
@@ -51,7 +53,7 @@ class _MemoryCore:
 
     def __init__(
         self,
-        model: object,
+        model: ModelType,
         config: MemoryConfig | None = None,
         *,
         embedder: EmbeddingClient,
@@ -60,10 +62,11 @@ class _MemoryCore:
         import grafeo
 
         self._config = config or MemoryConfig()
-        self._model = model
+        self._model: ModelType = model
         self._embedder = embedder
         self._reranker = reranker
 
+        self._db: GrafeoDBProtocol
         if self._config.db_path:
             self._db = grafeo.GrafeoDB(self._config.db_path)
         else:
@@ -132,7 +135,7 @@ class _MemoryCore:
         it per-session corrupts httpx/anyio transport state on Windows.
         """
         if hasattr(self._db, "close"):
-            self._db.close()
+            self._db.close()  # ty: ignore[call-non-callable]
 
     # --- Scope filter building ---
 
@@ -399,7 +402,7 @@ class _MemoryCore:
 
         # Try batch creation, fall back to individual nodes
         try:
-            node_ids = self._db.batch_create_nodes_with_props(MEMORY_LABEL, properties_list)
+            node_ids = self._db.batch_create_nodes_with_props(MEMORY_LABEL, properties_list)  # ty: ignore[unresolved-attribute]
         except AttributeError:
             # batch_create_nodes_with_props not available, fall back to per-node creation
             node_ids = []
@@ -693,9 +696,9 @@ class _MemoryCore:
 
         if rerank and self._reranker is not None:
             if hasattr(self._reranker, "rerank_async"):
-                final = await self._reranker.rerank_async(query, final, top_k=k, _on_usage=on_usage)
+                final = await self._reranker.rerank_async(query, final, top_k=k, _on_usage=on_usage)  # ty: ignore[call-non-callable]
             else:
-                final = self._reranker.rerank(query, final, top_k=k, _on_usage=on_usage)
+                final = self._reranker.rerank(query, final, top_k=k, _on_usage=on_usage)  # ty: ignore[unresolved-attribute]
             if _trace is not None:
                 _trace.append(ExplainStep(name="rerank", detail={"applied": True}))
 
@@ -1224,7 +1227,7 @@ class _MemoryCore:
         algos = self._db.algorithms
 
         try:
-            ranks = algos.pagerank(0.85, 100, 1e-6)
+            ranks = algos.pagerank(0.85, 100, 1e-6)  # ty: ignore[unresolved-attribute]
             for node_id, score in ranks.items():
                 with contextlib.suppress(Exception):
                     self._db.set_node_property(node_id, "_pagerank", score)
@@ -1232,7 +1235,7 @@ class _MemoryCore:
             logger.debug("pagerank computation failed", exc_info=True)
 
         try:
-            centrality = algos.betweenness_centrality(True)
+            centrality = algos.betweenness_centrality(True)  # ty: ignore[unresolved-attribute]
             for node_id, score in centrality.items():
                 with contextlib.suppress(Exception):
                     self._db.set_node_property(node_id, "_betweenness", score)
@@ -1240,7 +1243,7 @@ class _MemoryCore:
             logger.debug("betweenness_centrality computation failed", exc_info=True)
 
         try:
-            result = algos.louvain(1.0)
+            result = algos.louvain(1.0)  # ty: ignore[unresolved-attribute]
             communities = result.get("communities", {}) if isinstance(result, dict) else {}
             for node_id, community_id in communities.items():
                 with contextlib.suppress(Exception):
@@ -1486,7 +1489,7 @@ class _MemoryCore:
             on_usage("summarize", result.usage())
 
             # Create new consolidated Memory nodes
-            consolidated_texts = [m for m in result.output.memories if m]
+            consolidated_texts = [m for m in result.output.memories if m]  # ty: ignore[unresolved-attribute]
             embeddings = self._embedder.embed(consolidated_texts)
             new_memory_ids: list[int] = []
             for text, embedding in zip(consolidated_texts, embeddings, strict=True):
@@ -1974,21 +1977,6 @@ class AsyncMemoryManager(_MemoryCore):
     async def history(self, memory_id: str) -> list[HistoryEntry]:
         """Get the change history for a memory."""
         return self._history_impl(memory_id)
-
-    async def temporal_chain(
-        self,
-        memory_id: str,
-        user_id: str | None = None,
-        direction: str = "forward",
-        max_depth: int = 5,
-    ) -> list:
-        """Follow LEADS_TO edges to build a temporal chain of memories."""
-        return super().temporal_chain(
-            memory_id,
-            user_id=user_id,
-            direction=direction,
-            max_depth=max_depth,
-        )
 
     def stats(self) -> MemoryStats:
         """Return database introspection statistics (no LLM calls)."""

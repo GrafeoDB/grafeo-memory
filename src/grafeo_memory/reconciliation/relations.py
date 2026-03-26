@@ -11,7 +11,7 @@ from pydantic_ai import Agent
 from .._compat import run_sync
 from ..prompts import RELATION_RECONCILE_SYSTEM, RELATION_RECONCILE_USER
 from ..schemas import RelationReconciliationOutput
-from ..types import Relation
+from ..types import ModelType, Relation
 
 if TYPE_CHECKING:
     from pydantic_ai.usage import RunUsage
@@ -19,12 +19,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _make_agent(model: object) -> Agent[None, RelationReconciliationOutput]:
+def _make_agent(model: ModelType) -> Agent:
     return Agent(model, system_prompt=RELATION_RECONCILE_SYSTEM, output_type=RelationReconciliationOutput)
 
 
 async def reconcile_relations_async(
-    model: object,
+    model: ModelType,
     new_relations: list[Relation],
     existing_relations: list[dict],
     *,
@@ -58,11 +58,12 @@ async def reconcile_relations_async(
 
     if _on_usage is not None:
         _on_usage("reconcile_relations", result.usage())
-    return [{"source": d.source, "target": d.target, "relation_type": d.relation_type} for d in result.output.delete]
+    output: RelationReconciliationOutput = result.output  # ty: ignore[invalid-assignment]
+    return [{"source": d.source, "target": d.target, "relation_type": d.relation_type} for d in output.delete]
 
 
 def reconcile_relations(
-    model: object,
+    model: ModelType,
     new_relations: list[Relation],
     existing_relations: list[dict],
     *,

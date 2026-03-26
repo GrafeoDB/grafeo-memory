@@ -11,19 +11,20 @@ from pydantic_ai import Agent
 from .._compat import run_sync
 from ..prompts import ENTITY_EXTRACTION_SYSTEM, ENTITY_EXTRACTION_USER
 from ..schemas import EntitiesOutput
-from ..types import Entity, ExtractionResult, Fact, Relation
+from ..types import Entity, ExtractionResult, Fact, ModelType, Relation
 
 if TYPE_CHECKING:
+    from pydantic_ai.result import AgentRunResult
     from pydantic_ai.usage import RunUsage
 
 logger = logging.getLogger(__name__)
 
 
-def _make_agent(model: object) -> Agent[None, EntitiesOutput]:
+def _make_agent(model: ModelType) -> Agent:
     return Agent(model, system_prompt=ENTITY_EXTRACTION_SYSTEM, output_type=EntitiesOutput)
 
 
-def _parse(result: object) -> tuple[list[Entity], list[Relation]]:
+def _parse(result: AgentRunResult[EntitiesOutput]) -> tuple[list[Entity], list[Relation]]:
     entities = [Entity(name=e.name, entity_type=e.entity_type) for e in result.output.entities]
     relations = [
         Relation(source=r.source, target=r.target, relation_type=r.relation_type) for r in result.output.relations
@@ -32,7 +33,7 @@ def _parse(result: object) -> tuple[list[Entity], list[Relation]]:
 
 
 async def extract_entities_async(
-    model: object,
+    model: ModelType,
     facts: list[Fact],
     user_id: str,
     *,
@@ -51,11 +52,11 @@ async def extract_entities_async(
         return [], []
     if _on_usage is not None:
         _on_usage("extract_entities", result.usage())
-    return _parse(result)
+    return _parse(result)  # ty: ignore[invalid-argument-type]
 
 
 def extract_entities(
-    model: object,
+    model: ModelType,
     facts: list[Fact],
     user_id: str,
     *,
@@ -66,7 +67,7 @@ def extract_entities(
 
 
 async def _extract_combined_async(
-    model: object,
+    model: ModelType,
     text: str,
     user_id: str,
     *,
@@ -77,7 +78,7 @@ async def _extract_combined_async(
     from ..prompts import COMBINED_EXTRACTION_SYSTEM, COMBINED_EXTRACTION_USER
     from ..schemas import ExtractionOutput
 
-    agent = Agent(model, system_prompt=custom_prompt or COMBINED_EXTRACTION_SYSTEM, output_type=ExtractionOutput)
+    agent: Agent = Agent(model, system_prompt=custom_prompt or COMBINED_EXTRACTION_SYSTEM, output_type=ExtractionOutput)
     try:
         result = await agent.run(COMBINED_EXTRACTION_USER.format(user_id=user_id, text=text))
     except Exception:
@@ -85,16 +86,15 @@ async def _extract_combined_async(
         return ExtractionResult()
     if _on_usage is not None:
         _on_usage("extract", result.usage())
-    facts = [Fact(text=f) for f in result.output.facts if f]
-    entities = [Entity(name=e.name, entity_type=e.entity_type) for e in result.output.entities]
-    relations = [
-        Relation(source=r.source, target=r.target, relation_type=r.relation_type) for r in result.output.relations
-    ]
+    output: ExtractionOutput = result.output  # ty: ignore[invalid-assignment]
+    facts = [Fact(text=f) for f in output.facts if f]
+    entities = [Entity(name=e.name, entity_type=e.entity_type) for e in output.entities]
+    relations = [Relation(source=r.source, target=r.target, relation_type=r.relation_type) for r in output.relations]
     return ExtractionResult(facts=facts, entities=entities, relations=relations)
 
 
 async def extract_async(
-    model: object,
+    model: ModelType,
     text: str,
     user_id: str,
     *,
@@ -133,7 +133,7 @@ async def extract_async(
 
 
 def extract(
-    model: object,
+    model: ModelType,
     text: str,
     user_id: str,
     *,

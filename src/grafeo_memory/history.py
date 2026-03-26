@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .protocol import GrafeoDBProtocol
 
 HISTORY_LABEL = "History"
 HAS_HISTORY_EDGE = "HAS_HISTORY"
@@ -21,7 +25,7 @@ class HistoryEntry:
     role: str | None = None
 
 
-def record_history(db: object, memory_node_id: int, entry: HistoryEntry) -> int | None:
+def record_history(db: GrafeoDBProtocol, memory_node_id: int, entry: HistoryEntry) -> int | None:
     """Record a history entry.
 
     With native CDC, this is a no-op (the engine tracks changes automatically).
@@ -51,11 +55,11 @@ def record_history(db: object, memory_node_id: int, entry: HistoryEntry) -> int 
     return node_id
 
 
-def get_history(db: object, memory_node_id: int) -> list[HistoryEntry]:
+def get_history(db: GrafeoDBProtocol, memory_node_id: int) -> list[HistoryEntry]:
     """Retrieve history. Prefers native CDC when available."""
     if hasattr(db, "node_history"):
         try:
-            events = db.node_history(memory_node_id)
+            events = db.node_history(memory_node_id)  # ty: ignore[call-non-callable]
             entries: list[HistoryEntry] = []
             for ev in events:
                 kind = (ev.get("kind") or "UNKNOWN").upper()

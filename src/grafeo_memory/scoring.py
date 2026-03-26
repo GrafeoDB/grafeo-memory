@@ -6,6 +6,7 @@ import logging
 import math
 import time
 
+from .protocol import GrafeoDBProtocol
 from .types import ENTITY_LABEL, HAS_ENTITY_EDGE, MEMORY_LABEL, MemoryConfig, SearchResult
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ def compute_composite_score(
 
 def apply_importance_scoring(
     results: list[SearchResult],
-    db: object,
+    db: GrafeoDBProtocol,
     config: MemoryConfig,
 ) -> list[SearchResult]:
     """Re-score results with composite importance scoring and update access stats.
@@ -126,7 +127,7 @@ def apply_importance_scoring(
 
 def apply_cross_session_boost(
     results: list[SearchResult],
-    db: object,
+    db: GrafeoDBProtocol,
     config: MemoryConfig,
 ) -> list[SearchResult]:
     """Boost scores using cached graph algorithm metrics (pagerank, betweenness).
@@ -183,7 +184,7 @@ def apply_cross_session_boost(
 
 def apply_topology_boost(
     results: list[SearchResult],
-    db: object,
+    db: GrafeoDBProtocol,
     config: MemoryConfig,
 ) -> list[SearchResult]:
     """Boost search result scores based on graph-topology connectivity.
@@ -242,7 +243,7 @@ def _topology_score(entity_count: int, shared_entity_ratio: float) -> float:
 
 
 def _compute_reinforcement(
-    db: object,
+    db: GrafeoDBProtocol,
     memory_id: int,
     created_at: int,
     gamma: float,
@@ -299,7 +300,7 @@ def _compute_reinforcement(
 
 
 def _batch_topology_scores(
-    db: object,
+    db: GrafeoDBProtocol,
     memory_ids: list[str],
     config: MemoryConfig,
 ) -> dict[str, tuple[float, float]]:

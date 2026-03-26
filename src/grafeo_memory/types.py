@@ -9,6 +9,7 @@ from enum import Enum, StrEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from pydantic_ai.models import KnownModelName, Model
     from pydantic_ai.models.instrumented import InstrumentationSettings
     from pydantic_ai.usage import RunUsage
 
@@ -23,6 +24,9 @@ from .schemas import (
     RelationItem,
     RelationReconciliationOutput,
 )
+
+#: Model parameter type accepted by pydantic-ai Agent.
+type ModelType = Model | KnownModelName | str | None
 
 
 class MemoryAction(Enum):
@@ -83,7 +87,7 @@ class MemoryConfig:
     instrument: InstrumentationSettings | bool = False
     # Vision / multimodal (opt-in)
     enable_vision: bool = False
-    vision_model: object | None = None
+    vision_model: ModelType | None = None
     # Multi-hop graph search depth (1 = current behavior, 2 = entity→relation→entity→memory)
     graph_search_depth: int = 1
     # MMR search for diversity (opt-in, uses engine's mmr_search)

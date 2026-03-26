@@ -11,6 +11,7 @@ from pydantic_ai import Agent, ImageUrl
 from ._compat import run_sync
 from .messages import ImageContent
 from .prompts import IMAGE_DESCRIBE_SYSTEM
+from .types import ModelType
 
 if TYPE_CHECKING:
     from pydantic_ai.usage import RunUsage
@@ -21,7 +22,7 @@ _DESCRIBE_USER = "Describe this image concisely."
 
 
 async def describe_images_async(
-    model: object,
+    model: ModelType,
     images: list[ImageContent],
     *,
     _on_usage: Callable[[str, RunUsage], None] | None = None,
@@ -55,7 +56,7 @@ async def describe_images_async(
 
 
 def describe_images(
-    model: object,
+    model: ModelType,
     images: list[ImageContent],
     *,
     _on_usage: Callable[[str, RunUsage], None] | None = None,

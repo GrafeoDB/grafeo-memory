@@ -6,6 +6,7 @@ from .embedding import EmbeddingClient, MistralEmbedder, OpenAIEmbedder
 from .history import HistoryEntry
 from .manager import AsyncMemoryManager, MemoryManager
 from .messages import ImageContent, Message
+from .protocol import GrafeoDBProtocol, GrafeoNode
 from .reranker import LLMReranker, Reranker
 from .scoring import (
     apply_cross_session_boost,
@@ -50,6 +51,8 @@ __all__ = [
     "ExtractionResult",
     "Fact",
     "FactsOutput",
+    "GrafeoDBProtocol",
+    "GrafeoNode",
     "HistoryEntry",
     "ImageContent",
     "InstrumentationSettings",

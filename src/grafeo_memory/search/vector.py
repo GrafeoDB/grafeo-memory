@@ -12,10 +12,11 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..embedding import EmbeddingClient
+    from ..protocol import GrafeoDBProtocol
 
 
 def vector_search(
-    db: object,
+    db: GrafeoDBProtocol,
     embedder: EmbeddingClient,
     query: str,
     *,
@@ -75,7 +76,7 @@ def vector_search(
 
 
 def hybrid_search(
-    db: object,
+    db: GrafeoDBProtocol,
     embedder: EmbeddingClient,
     query: str,
     *,
@@ -117,7 +118,7 @@ def hybrid_search(
         all_filters.update(filters)
 
     try:
-        results = db.hybrid_search(
+        results = db.hybrid_search(  # ty: ignore[call-non-callable]
             MEMORY_LABEL,
             text_property,
             vector_property,
@@ -187,7 +188,7 @@ def hybrid_search(
 
 
 def diverse_search(
-    db: object,
+    db: GrafeoDBProtocol,
     embedder: EmbeddingClient,
     query: str,
     *,
@@ -224,7 +225,7 @@ def diverse_search(
         )
 
     try:
-        results = db.mmr_search(
+        results = db.mmr_search(  # ty: ignore[call-non-callable]
             MEMORY_LABEL,
             vector_property,
             query_embedding,
@@ -285,7 +286,7 @@ def diverse_search(
 
 
 def search_similar(
-    db: object,
+    db: GrafeoDBProtocol,
     embeddings: list[list[float]],
     *,
     user_id: str,
@@ -374,7 +375,7 @@ def _matches_filters(props: dict, filters: dict) -> bool:
     return True
 
 
-def _get_node_relations(db: object, node_id: int) -> list[dict]:
+def _get_node_relations(db: GrafeoDBProtocol, node_id: int) -> list[dict]:
     """Get relations for a memory node by traversing HAS_ENTITY and RELATION edges."""
     from ..types import ENTITY_LABEL, HAS_ENTITY_EDGE, RELATION_EDGE
 
@@ -407,8 +408,8 @@ def _get_props(node: object) -> dict:
     if hasattr(node, "properties"):
         p = node.properties
         if callable(p):
-            return p()
-        return p
+            return p()  # ty: ignore[call-top-callable, invalid-return-type]
+        return p  # ty: ignore[invalid-return-type]
     return {}
 
 

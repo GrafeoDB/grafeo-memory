@@ -40,7 +40,7 @@ async def memory_stats(ctx: Context[ServerSession, AppContext]) -> str:
     except Exception:
         info = {}
     try:
-        stats = db.detailed_stats()
+        stats = db.detailed_stats()  # ty: ignore[unresolved-attribute]
     except Exception:
         stats = {}
     return json.dumps({"db_info": info, "db_stats": stats}, default=str)
