@@ -5,6 +5,45 @@ All notable changes to grafeo-memory are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-03-26
+
+Temporal reasoning, multi-hop search and engine integration for better long running memory performance.
+
+### Added
+
+- **Soft expiry**: reconciliation DELETE now sets `expired_at` instead of removing nodes. Old facts remain queryable for point-in-time reconstruction. `include_expired` parameter on `search()` and `get_all()` to access expired memories explicitly
+- **Soft-expiry UPDATE**: creates a new memory node and a `SUPERSEDES` edge to the expired original, preserving full lineage
+- **Time-range search**: `time_before` and `time_after` parameters on `search()` filter results by `created_at` timestamp
+- **Temporal keyword detection**: rule-based heuristics detect "when", "first", "used to", "how many days", etc. in queries. Auto-expands result limits, includes expired memories, and sorts chronologically when appropriate. New `detect_temporal_hints()` utility and `TemporalHints` dataclass
+- **`LEADS_TO` edges**: sequential `add()` calls within a session (`run_id` or `session_id`) create temporal ordering edges, forming causal chains across a conversation
+- **`temporal_chain()` method**: follows `LEADS_TO` edges forward, backward, or both, with configurable max depth. Available on `MemoryManager` and `AsyncMemoryManager`
+- **2-hop graph traversal**: `graph_search_depth=2` config option enables `Memory -> Entity -> RELATION -> Entity -> Memory` paths, surfacing indirectly connected memories. 2-hop results score at 0.7x to prefer direct matches
+- **Graph algorithm scoring**: `enable_graph_algorithms=True` runs PageRank, betweenness centrality, and Louvain community detection after each `add()`. Results cached as node properties (`_pagerank`, `_betweenness`, `_community`), recomputed only when the graph changes
+- **Cross-session entity reinforcement**: `cross_session_factor` config option boosts memories connected to high-PageRank/betweenness nodes, promoting cross-session hubs
+- **MMR diverse search**: `search(query, diverse=True)` uses the engine's `mmr_search()` for Maximal Marginal Relevance retrieval, avoiding same-session clustering. `mmr_lambda` config tunes relevance vs. diversity (default 0.5)
+- **Session-grouped results**: `search(query, grouped=True)` returns results organized by `session_id`, chronologically sorted within each group
+- **Property indexes**: automatic `create_property_index()` on `user_id`, `created_at`, `memory_type`, and `name` at startup for O(1) filtered lookups
+- **Batch node creation**: `_raw_add_batch()` uses `batch_create_nodes_with_props()` for bulk ingestion, with per-node fallback when unavailable
+- **`learned_at` timestamp**: every memory now stores when it was first learned, distinct from `created_at` (which tracks node creation). Populated on `SearchResult`
+- **`session_id` on SearchResult**: search results now carry `session_id` for downstream grouping
+- **Native CDC history**: `record_history()` is a no-op when the engine exposes `node_history()` (change data capture). `get_history()` prefers engine-native CDC events, falling through to legacy `:History` nodes
+- New edge types: `SUPERSEDES_EDGE`, `LEADS_TO_EDGE`
+- New config options: `graph_search_depth`, `mmr_lambda`, `cross_session_factor`, `enable_graph_algorithms`
+- New exports: `SUPERSEDES_EDGE`, `LEADS_TO_EDGE`, `TemporalHints`, `detect_temporal_hints`, `apply_cross_session_boost`
+- New module: `temporal.py`
+- 57 new tests across `test_temporal.py`, `test_multi_hop.py`, `test_new_features.py`, and `test_history.py`
+
+### Changed
+
+- **BREAKING: reconciliation DELETE is now soft expiry**. Nodes are preserved with `expired_at` set. Use `manager.delete()` for hard deletion. Existing code calling `get_all()` or `search()` is unaffected (expired memories excluded by default)
+- **BREAKING: reconciliation UPDATE creates a new node** instead of mutating in place. The old node is expired and linked via `SUPERSEDES`. `MemoryEvent.memory_id` now points to the new node
+- `SearchResult` gains four new fields: `created_at`, `learned_at`, `session_id`, `expired_at` (all default `None`, backward compatible)
+- `search()` and `explain()` gain `time_before`, `time_after`, `include_expired`, `diverse`, and `grouped` keyword parameters
+- `get_all()` gains `include_expired` keyword parameter
+- `_get_memories_with_timestamps()` now excludes expired memories (affects `summarize()`)
+- History module prefers engine CDC when available, reducing graph clutter from `:History` nodes
+- 387 tests passing, 78% coverage
+
 ## [0.1.5] - 2026-03-14
 
 Guardrails, observability, and search quality: config validation, database introspection, search pipeline tracing, result provenance, score filtering, agreement bonus, threshold semantics fix, and concurrency safety.
@@ -158,6 +197,7 @@ Initial release.
 - **Windows async compatibility**: persistent `asyncio.Runner` and `ProactorEventLoop` safety net for Python 3.13+
 - 230 tests, 83% coverage
 
+[0.2.0]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.2...v0.1.3
