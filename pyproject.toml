@@ -1,6 +1,6 @@
 [project]
 name = "grafeo-memory"
-version = "0.1.5"
+version = "0.2.0"
 description = "AI memory layer powered by GrafeoDB's hybrid graph and vector database"
 readme = "README.md"
 license = "Apache-2.0"
@@ -14,7 +14,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "grafeo>=0.5",
+    "grafeo>=0.5.27",
     "pydantic-ai-slim",
 ]
 

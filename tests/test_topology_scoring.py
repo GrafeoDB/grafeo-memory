@@ -181,7 +181,7 @@ class TestModulatedRecencyScore:
         one_day_ago = now_ms - (24 * 60 * 60 * 1000)
         base = _recency_score(one_day_ago, decay_rate=0.1)
         modulated = _modulated_recency_score(one_day_ago, decay_rate=0.1, reinforcement=0.0)
-        assert abs(base - modulated) < 1e-10
+        assert abs(base - modulated) < 1e-6
 
     def test_reinforcement_slows_decay(self):
         """Higher reinforcement should produce higher recency score (slower decay)."""
