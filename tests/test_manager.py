@@ -13,7 +13,7 @@ def _make_manager(outputs, dims=16, **config_kwargs):
     embedder = MockEmbedder(dims)
     defaults = {"db_path": None, "user_id": "test_user", "embedding_dimensions": dims}
     defaults.update(config_kwargs)
-    config = MemoryConfig(**defaults)
+    config = MemoryConfig(**defaults)  # type: ignore[invalid-argument-type]
     return MemoryManager(model, config, embedder=embedder)
 
 
@@ -23,7 +23,7 @@ def _make_async_manager(outputs, dims=16, **config_kwargs):
     embedder = MockEmbedder(dims)
     defaults = {"db_path": None, "user_id": "test_user", "embedding_dimensions": dims}
     defaults.update(config_kwargs)
-    config = MemoryConfig(**defaults)
+    config = MemoryConfig(**defaults)  # type: ignore[invalid-argument-type]
     return AsyncMemoryManager(model, config, embedder=embedder)
 
 
