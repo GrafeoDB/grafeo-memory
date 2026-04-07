@@ -7,10 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.1] - 2026-04-07
 
-Test quality, error surfacing and documentation improvements.
+Test quality, error surfacing, documentation improvements, and shared database support.
 
 ### Added
 
+- **Shared database support**: `MemoryManager` and `AsyncMemoryManager` accept an optional `db=` keyword argument to inject an existing `GrafeoDB` instance instead of creating one internally. `close()` respects ownership and leaves externally provided databases open ([#18](https://github.com/GrafeoDB/grafeo-memory/issues/18), [#19](https://github.com/GrafeoDB/grafeo-memory/pull/19), thanks [@Michaelzag](https://github.com/Michaelzag))
+- **Multi-tenant safety**: all internal operations are now scoped to Memory and Entity nodes, making it safe to share a database with non-memory data
+
+### Fixed
+
+- **Graph metrics pollution**: `_recompute_graph_metrics()` now writes `_pagerank`, `_betweenness`, `_community` only to Memory/Entity nodes instead of every node in the database
+- **Unlabeled Cypher queries**: `temporal_chain()` and `_get_node_relations()` now require `:Memory` labels on match patterns, preventing traversal from foreign nodes
+- **N+1 entity lookup**: `_find_or_create_entity` and `graph_search` replaced global `find_nodes_by_property` + Python filtering with single label-scoped Cypher queries, reducing FFI crossings
+- **Stats data leak**: `_stats_impl()` no longer exposes raw `db.info()`, returning only memory-scoped counts. MCP `memory://stats` resource now delegates to the manager's scoped stats
 - **Error surfacing tests**: broken embedder on add/search now verified to raise, not silently return empty results
 - **Persistence lifecycle tests**: write, close, reopen round-trip with `tmp_path`
 - **Multi-session regression tests**: sequential open/close/open guards against event loop corruption
