@@ -70,6 +70,7 @@ class TestConcurrentAddDifferentUsers:
     def test_user_isolation_under_concurrency(self):
         async def _run():
             async with _make_async_manager() as manager:
+
                 async def add_for_user(user_id: str):
                     for i in range(5):
                         await manager.add(f"{user_id} fact {i}", user_id=user_id, infer=False)
@@ -98,6 +99,7 @@ class TestConcurrentAddDifferentUsers:
     def test_three_users_concurrent(self):
         async def _run():
             async with _make_async_manager() as manager:
+
                 async def add_for_user(user_id: str):
                     for i in range(3):
                         await manager.add(f"{user_id} item {i}", user_id=user_id, infer=False)
