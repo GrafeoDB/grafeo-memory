@@ -58,6 +58,7 @@ class _MemoryCore:
         *,
         embedder: EmbeddingClient,
         reranker: object | None = None,
+        db: GrafeoDBProtocol | None = None,
     ):
         import grafeo
 
@@ -67,7 +68,10 @@ class _MemoryCore:
         self._reranker = reranker
 
         self._db: GrafeoDBProtocol
-        if self._config.db_path:
+        self._db_external = db is not None
+        if db is not None:
+            self._db = db
+        elif self._config.db_path:
             self._db = grafeo.GrafeoDB(self._config.db_path)
         else:
             self._db = grafeo.GrafeoDB()
@@ -84,6 +88,14 @@ class _MemoryCore:
             Agent.instrument_all(self._config.instrument if self._config.instrument is not True else True)
 
     def _ensure_indexes(self) -> None:
+        """Create indexes for efficient memory queries.
+
+        Vector and text indexes are label-scoped to Memory nodes. Property
+        indexes (user_id, created_at, memory_type, name) are database-wide
+        because GrafeoDB's ``create_property_index`` does not support
+        label-scoped indexing. In a shared database these indexes will also
+        cover non-memory nodes — harmless but slightly wasteful.
+        """
         vp = self._config.vector_property
         tp = self._config.text_property
         dims = self._config.embedding_dimensions
@@ -108,7 +120,7 @@ class _MemoryCore:
         except Exception:
             logger.debug("Text index creation deferred or already exists")
 
-        # Property indexes for fast filtered lookups
+        # Property indexes for fast filtered lookups (database-wide; see docstring).
         for prop in ("user_id", "created_at", "memory_type"):
             with contextlib.suppress(Exception):
                 self._db.create_property_index(prop)
@@ -130,10 +142,15 @@ class _MemoryCore:
     def close(self) -> None:
         """Close the database connection.
 
+        If the database was externally provided via the ``db`` parameter,
+        it is **not** closed here — the caller owns its lifecycle.
+
         The async runner is intentionally NOT closed here — it is shared across
         sessions and cleaned up automatically at process exit via atexit. Closing
         it per-session corrupts httpx/anyio transport state on Windows.
         """
+        if self._db_external:
+            return
         if hasattr(self._db, "close"):
             self._db.close()  # ty: ignore[call-non-callable]
 
@@ -1162,7 +1179,7 @@ class _MemoryCore:
 
         if direction in ("forward", "both"):
             query = (
-                f"MATCH (m)-[:LEADS_TO*1..{max_depth}]->(rest:Memory) "
+                f"MATCH (m:{MEMORY_LABEL})-[:{LEADS_TO_EDGE}*1..{max_depth}]->(rest:{MEMORY_LABEL}) "
                 f"WHERE id(m) = $mid{user_filter} "
                 f"RETURN id(rest), rest.text, rest.created_at, rest.session_id "
                 f"ORDER BY rest.created_at"
@@ -1192,7 +1209,7 @@ class _MemoryCore:
 
         if direction in ("backward", "both"):
             query = (
-                f"MATCH (rest:Memory)-[:LEADS_TO*1..{max_depth}]->(m) "
+                f"MATCH (rest:{MEMORY_LABEL})-[:{LEADS_TO_EDGE}*1..{max_depth}]->(m:{MEMORY_LABEL}) "
                 f"WHERE id(m) = $mid{user_filter} "
                 f"RETURN id(rest), rest.text, rest.created_at, rest.session_id "
                 f"ORDER BY rest.created_at"
@@ -1247,6 +1264,10 @@ class _MemoryCore:
         Runs pagerank, betweenness centrality, and louvain community detection.
         Results are stored as node properties for fast access during search scoring.
         Only runs when enable_graph_algorithms is True and the graph has changed.
+
+        Only Memory and Entity nodes are updated. Algorithm computation may span
+        the full graph (GrafeoDB API limitation), so scores can be influenced by
+        non-memory topology when using a shared database.
         """
         if not self._config.enable_graph_algorithms or not self._graph_dirty:
             return
@@ -1256,21 +1277,32 @@ class _MemoryCore:
             logger.debug("Graph algorithms not available on this db instance")
             return
 
+        # Collect IDs of nodes we own so we only write to Memory/Entity nodes.
+        owned_ids: set[int] = set()
+        for node_id, _ in self._db.get_nodes_by_label(MEMORY_LABEL):
+            owned_ids.add(node_id)
+        for node_id, _ in self._db.get_nodes_by_label(ENTITY_LABEL):
+            owned_ids.add(node_id)
+        if not owned_ids:
+            return
+
         algos = self._db.algorithms
 
         try:
             ranks = algos.pagerank(0.85, 100, 1e-6)  # ty: ignore[unresolved-attribute]
             for node_id, score in ranks.items():
-                with contextlib.suppress(Exception):
-                    self._db.set_node_property(node_id, "_pagerank", score)
+                if node_id in owned_ids:
+                    with contextlib.suppress(Exception):
+                        self._db.set_node_property(node_id, "_pagerank", score)
         except Exception:
             logger.debug("pagerank computation failed", exc_info=True)
 
         try:
             centrality = algos.betweenness_centrality(True)  # ty: ignore[unresolved-attribute]
             for node_id, score in centrality.items():
-                with contextlib.suppress(Exception):
-                    self._db.set_node_property(node_id, "_betweenness", score)
+                if node_id in owned_ids:
+                    with contextlib.suppress(Exception):
+                        self._db.set_node_property(node_id, "_betweenness", score)
         except Exception:
             logger.debug("betweenness_centrality computation failed", exc_info=True)
 
@@ -1278,8 +1310,9 @@ class _MemoryCore:
             result = algos.louvain(1.0)  # ty: ignore[unresolved-attribute]
             communities = result.get("communities", {}) if isinstance(result, dict) else {}
             for node_id, community_id in communities.items():
-                with contextlib.suppress(Exception):
-                    self._db.set_node_property(node_id, "_community", community_id)
+                if node_id in owned_ids:
+                    with contextlib.suppress(Exception):
+                        self._db.set_node_property(node_id, "_community", community_id)
         except Exception:
             logger.debug("louvain community detection failed", exc_info=True)
 
@@ -1324,19 +1357,17 @@ class _MemoryCore:
 
     def _find_or_create_entity(self, entity: Entity, user_id: str) -> int:
         try:
-            nodes = self._db.find_nodes_by_property("name", entity.name)
+            rows = self._db.execute(
+                f"MATCH (e:{ENTITY_LABEL}) WHERE e.name = $name AND e.user_id = $uid RETURN id(e)",
+                {"name": entity.name, "uid": user_id},
+            )
+            for row in rows:
+                if isinstance(row, dict):
+                    vals = list(row.values())
+                    if vals:
+                        return int(vals[0])
         except Exception:
             logger.warning("_find_or_create_entity: lookup failed for %r", entity.name, exc_info=True)
-            nodes = []
-
-        for nid in nodes:
-            node = self._db.get_node(nid)
-            if node is None:
-                continue
-            props = _get_props(node)
-            labels = node.labels if hasattr(node, "labels") else []
-            if ENTITY_LABEL in labels and props.get("user_id") == user_id:
-                return nid
 
         node = self._db.create_node(
             [ENTITY_LABEL],
@@ -1594,11 +1625,6 @@ class _MemoryCore:
         except Exception:
             pass
 
-        try:
-            db_info = self._db.info()
-        except Exception:
-            db_info = {}
-
         total = semantic + procedural + episodic
         return MemoryStats(
             total_memories=total,
@@ -1607,7 +1633,11 @@ class _MemoryCore:
             episodic_count=episodic,
             entity_count=entity_count,
             relation_count=relation_count,
-            db_info=db_info if isinstance(db_info, dict) else {},
+            db_info={
+                "memory_node_count": total,
+                "entity_node_count": entity_count,
+                "relation_edge_count": relation_count,
+            },
         )
 
     def _set_importance_impl(self, memory_id: str, importance: float) -> bool:

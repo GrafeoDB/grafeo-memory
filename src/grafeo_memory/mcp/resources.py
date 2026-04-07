@@ -32,15 +32,17 @@ async def memory_config(ctx: Context[ServerSession, AppContext]) -> str:
 
 @mcp.resource("memory://stats")
 async def memory_stats(ctx: Context[ServerSession, AppContext]) -> str:
-    """Memory system statistics: node/edge counts, database info."""
+    """Memory system statistics: node/edge counts scoped to memory data."""
     manager = ctx.request_context.lifespan_context.manager
-    db = manager._db
-    try:
-        info = db.info()
-    except Exception:
-        info = {}
-    try:
-        stats = db.detailed_stats()  # ty: ignore[unresolved-attribute]
-    except Exception:
-        stats = {}
-    return json.dumps({"db_info": info, "db_stats": stats}, default=str)
+    stats = manager._stats_impl()
+    return json.dumps(
+        {
+            "total_memories": stats.total_memories,
+            "semantic_count": stats.semantic_count,
+            "procedural_count": stats.procedural_count,
+            "episodic_count": stats.episodic_count,
+            "entity_count": stats.entity_count,
+            "relation_count": stats.relation_count,
+        },
+        default=str,
+    )

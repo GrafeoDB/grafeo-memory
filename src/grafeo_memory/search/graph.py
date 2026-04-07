@@ -79,26 +79,27 @@ def graph_search(
     seen_memory_ids: set[str] = set()
 
     for entity in entities:
+        # Find Entity nodes by name, scoped to the Entity label and user.
+        entity_nids: list[int] = []
         try:
-            node_ids = db.find_nodes_by_property("name", entity.name)
+            rows = db.execute(
+                f"MATCH (e:{ENTITY_LABEL}) WHERE e.name = $name AND e.user_id = $uid RETURN id(e)",
+                {"name": entity.name, "uid": user_id},
+            )
+            entity_nids = [int(next(iter(r.values()))) for r in rows if isinstance(r, dict) and r]
         except Exception:
-            logger.warning("graph_search: find_nodes_by_property failed for entity=%r", entity.name, exc_info=True)
-            continue
+            logger.warning("graph_search: entity lookup failed for %r", entity.name, exc_info=True)
 
-        # Also try case-insensitive match
-        if not node_ids:
+        # Case-insensitive fallback
+        if not entity_nids:
             with contextlib.suppress(Exception):
-                node_ids = db.find_nodes_by_property("name", entity.name.lower())
+                rows = db.execute(
+                    f"MATCH (e:{ENTITY_LABEL}) WHERE toLower(e.name) = $name AND e.user_id = $uid RETURN id(e)",
+                    {"name": entity.name.lower(), "uid": user_id},
+                )
+                entity_nids = [int(next(iter(r.values()))) for r in rows if isinstance(r, dict) and r]
 
-        for entity_nid in node_ids:
-            node = db.get_node(entity_nid)
-            if node is None:
-                continue
-            props = _get_props(node)
-            labels = node.labels if hasattr(node, "labels") else []
-            if ENTITY_LABEL not in labels or props.get("user_id") != user_id:
-                continue
-
+        for entity_nid in entity_nids:
             # Traverse HAS_ENTITY edges back to Memory nodes
             try:
                 query_str = (

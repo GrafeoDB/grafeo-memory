@@ -377,12 +377,12 @@ def _matches_filters(props: dict, filters: dict) -> bool:
 
 def _get_node_relations(db: GrafeoDBProtocol, node_id: int) -> list[dict]:
     """Get relations for a memory node by traversing HAS_ENTITY and RELATION edges."""
-    from ..types import ENTITY_LABEL, HAS_ENTITY_EDGE, RELATION_EDGE
+    from ..types import ENTITY_LABEL, HAS_ENTITY_EDGE, MEMORY_LABEL, RELATION_EDGE
 
     relations: list[dict] = []
     try:
         query = (
-            f"MATCH (m)-[:{HAS_ENTITY_EDGE}]->(e:{ENTITY_LABEL})"
+            f"MATCH (m:{MEMORY_LABEL})-[:{HAS_ENTITY_EDGE}]->(e:{ENTITY_LABEL})"
             f"-[r:{RELATION_EDGE}]->(t:{ENTITY_LABEL}) "
             f"WHERE id(m) = $nid RETURN e.name, r.relation_type, t.name"
         )
