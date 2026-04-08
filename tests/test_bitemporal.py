@@ -17,7 +17,9 @@ def _make_manager(outputs, dims=16, **config_kwargs):
     defaults = {"db_path": None, "user_id": "test_user", "embedding_dimensions": dims}
     defaults.update(config_kwargs)
     config = MemoryConfig(**defaults)  # type: ignore[invalid-argument-type]
-    return MemoryManager(model, config, embedder=embedder, db=db) if db else MemoryManager(model, config, embedder=embedder)
+    if db:
+        return MemoryManager(model, config, embedder=embedder, db=db)
+    return MemoryManager(model, config, embedder=embedder)
 
 
 def _extraction_output(facts, entities=None, relations=None):
@@ -150,7 +152,9 @@ class TestBiTemporalAdd:
             [
                 _extraction_output(["alice now works at globex"]),
                 _temporal_annotation_output([{"fact_index": 0, "valid_at": "2024-03-01", "invalid_at": None}]),
-                {"decisions": [{"action": "update", "text": "alice now works at globex", "target_memory_id": old_memory_id}]},
+                {"decisions": [
+                    {"action": "update", "text": "alice now works at globex", "target_memory_id": old_memory_id},
+                ]},
             ],
             enable_bitemporal=True,
             reconciliation_threshold=0.0,
