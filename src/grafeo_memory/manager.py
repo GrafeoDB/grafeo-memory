@@ -1951,7 +1951,8 @@ class _MemoryCore:
             entity_nodes = self._db.get_nodes_by_label(ENTITY_LABEL)
             if gn:
                 entity_count = sum(
-                    1 for item in entity_nodes
+                    1
+                    for item in entity_nodes
                     if (item[1] if isinstance(item, tuple) else _get_props(item)).get("graph_name") == gn
                 )
             else:

@@ -91,9 +91,15 @@ class TestGraphNameReadIsolation:
     def test_search_isolated_between_graphs(self):
         db = grafeo.GrafeoDB()
         mgr_a = _make_manager(db, "graph_a", [_extraction()])
-        mgr_b = _make_manager(db, "graph_b", [
-            _extraction(facts=["bob likes hiking"], entities=[{"name": "bob", "entity_type": "person"}], relations=[]),
-        ])
+        mgr_b = _make_manager(
+            db,
+            "graph_b",
+            [
+                _extraction(
+                    facts=["bob likes hiking"], entities=[{"name": "bob", "entity_type": "person"}], relations=[]
+                ),
+            ],
+        )
 
         mgr_a.add("Alice works at Acme Corp")
         mgr_b.add("Bob likes hiking")
@@ -118,9 +124,15 @@ class TestGraphNameReadIsolation:
     def test_get_all_isolated_between_graphs(self):
         db = grafeo.GrafeoDB()
         mgr_a = _make_manager(db, "graph_a", [_extraction()])
-        mgr_b = _make_manager(db, "graph_b", [
-            _extraction(facts=["bob likes hiking"], entities=[{"name": "bob", "entity_type": "person"}], relations=[]),
-        ])
+        mgr_b = _make_manager(
+            db,
+            "graph_b",
+            [
+                _extraction(
+                    facts=["bob likes hiking"], entities=[{"name": "bob", "entity_type": "person"}], relations=[]
+                ),
+            ],
+        )
 
         mgr_a.add("Alice works at Acme Corp")
         mgr_b.add("Bob likes hiking")
@@ -139,9 +151,15 @@ class TestGraphNameReadIsolation:
     def test_no_graph_name_sees_everything(self):
         db = grafeo.GrafeoDB()
         mgr_a = _make_manager(db, "graph_a", [_extraction()])
-        mgr_b = _make_manager(db, "graph_b", [
-            _extraction(facts=["bob likes hiking"], entities=[{"name": "bob", "entity_type": "person"}], relations=[]),
-        ])
+        mgr_b = _make_manager(
+            db,
+            "graph_b",
+            [
+                _extraction(
+                    facts=["bob likes hiking"], entities=[{"name": "bob", "entity_type": "person"}], relations=[]
+                ),
+            ],
+        )
         mgr_all = _make_manager(db, None, [])
 
         mgr_a.add("Alice works at Acme Corp")
@@ -170,10 +188,7 @@ class TestGraphNameEntityIsolation:
 
         # Should have two separate "alice" entity nodes
         entity_nodes = db.get_nodes_by_label(ENTITY_LABEL)
-        alice_nodes = [
-            (nid, props) for nid, props in entity_nodes
-            if props.get("name") == "alice"
-        ]
+        alice_nodes = [(nid, props) for nid, props in entity_nodes if props.get("name") == "alice"]
         assert len(alice_nodes) == 2
 
         graphs = {props.get("graph_name") for _, props in alice_nodes}
@@ -189,10 +204,18 @@ class TestGraphNameStats:
     def test_stats_scoped_to_graph(self):
         db = grafeo.GrafeoDB()
         mgr_a = _make_manager(db, "graph_a", [_extraction()])
-        mgr_b = _make_manager(db, "graph_b", [
-            _extraction(facts=["bob likes hiking"], entities=[{"name": "bob", "entity_type": "person"}], relations=[]),
-            _extraction(facts=["bob plays guitar"], entities=[{"name": "bob", "entity_type": "person"}], relations=[]),
-        ])
+        mgr_b = _make_manager(
+            db,
+            "graph_b",
+            [
+                _extraction(
+                    facts=["bob likes hiking"], entities=[{"name": "bob", "entity_type": "person"}], relations=[]
+                ),
+                _extraction(
+                    facts=["bob plays guitar"], entities=[{"name": "bob", "entity_type": "person"}], relations=[]
+                ),
+            ],
+        )
 
         mgr_a.add("Alice works at Acme Corp")
         mgr_b.add("Bob likes hiking")
@@ -214,9 +237,15 @@ class TestGraphNameStats:
     def test_stats_no_graph_name_counts_all(self):
         db = grafeo.GrafeoDB()
         mgr_a = _make_manager(db, "graph_a", [_extraction()])
-        mgr_b = _make_manager(db, "graph_b", [
-            _extraction(facts=["bob likes hiking"], entities=[{"name": "bob", "entity_type": "person"}], relations=[]),
-        ])
+        mgr_b = _make_manager(
+            db,
+            "graph_b",
+            [
+                _extraction(
+                    facts=["bob likes hiking"], entities=[{"name": "bob", "entity_type": "person"}], relations=[]
+                ),
+            ],
+        )
         mgr_all = _make_manager(db, None, [])
 
         mgr_a.add("Alice works at Acme Corp")
@@ -235,13 +264,25 @@ class TestGraphNameTemporalChain:
 
     def test_temporal_chain_scoped(self):
         db = grafeo.GrafeoDB()
-        mgr_a = _make_manager(db, "graph_a", [
-            _extraction(),
-            _extraction(facts=["alice got promoted"]),
-        ], run_id="session1")
-        mgr_b = _make_manager(db, "graph_b", [
-            _extraction(facts=["bob likes hiking"], entities=[{"name": "bob", "entity_type": "person"}], relations=[]),
-        ], run_id="session1")
+        mgr_a = _make_manager(
+            db,
+            "graph_a",
+            [
+                _extraction(),
+                _extraction(facts=["alice got promoted"]),
+            ],
+            run_id="session1",
+        )
+        mgr_b = _make_manager(
+            db,
+            "graph_b",
+            [
+                _extraction(
+                    facts=["bob likes hiking"], entities=[{"name": "bob", "entity_type": "person"}], relations=[]
+                ),
+            ],
+            run_id="session1",
+        )
 
         events_a = mgr_a.add("Alice works at Acme Corp")
         mgr_b.add("Bob likes hiking")
