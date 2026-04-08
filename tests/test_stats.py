@@ -94,7 +94,7 @@ class TestStats:
         s = manager.stats()
         assert s.episodic_count == 1
         assert s.total_memories == 1
-        assert s.episode_count >= 0
+        assert s.episode_count == 1
         manager.close()
 
     def test_stats_episode_count(self):
@@ -111,7 +111,7 @@ class TestStats:
         )
         manager.add("Team standup is at 9am")
         s = manager.stats()
-        assert s.episode_count >= 1
+        assert s.episode_count == 1
         manager.close()
 
     def test_stats_db_info_populated(self):
