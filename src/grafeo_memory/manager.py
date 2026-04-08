@@ -20,13 +20,18 @@ from .search.vector import _get_props, _parse_metadata
 from .types import (
     DERIVED_FROM_EDGE,
     ENTITY_LABEL,
+    EPISODE_LABEL,
     HAS_ENTITY_EDGE,
     LEADS_TO_EDGE,
     MEMORY_LABEL,
+    MENTIONS_EDGE,
+    NEXT_EPISODE_EDGE,
+    PRODUCED_EDGE,
     RELATION_EDGE,
     SUPERSEDES_EDGE,
     AddResult,
     Entity,
+    EpisodeResult,
     ExplainResult,
     ExplainStep,
     ExtractionResult,
@@ -228,12 +233,14 @@ class _MemoryCore:
                 importance=importance,
                 memory_type=mtype,
             )
-            # LEADS_TO edges for raw adds
             run = self._config.run_id or sid
-            if run:
-                new_ids = [e.memory_id for e in events if e.action == MemoryAction.ADD and e.memory_id]
-                if new_ids:
-                    self._link_session_chain(new_ids, uid, run)
+            new_ids = [e.memory_id for e in events if e.action == MemoryAction.ADD and e.memory_id]
+            if self._config.enable_episodes and events:
+                ep_id = self._create_episode(text, uid, sid, now_ms, None, events)
+                if run:
+                    self._link_episode_chain(ep_id, uid, run)
+            elif run and new_ids:
+                self._link_session_chain(new_ids, uid, run)
             if events:
                 self._graph_dirty = True
             return AddResult(events)
@@ -253,6 +260,14 @@ class _MemoryCore:
         )
         if not extraction.facts:
             return AddResult(usage=total)
+
+        # Bi-temporal: annotate facts with real-world validity timestamps
+        if self._config.enable_bitemporal:
+            from .extraction.temporal import annotate_temporal_async
+
+            extraction.temporal_annotations = await annotate_temporal_async(
+                self._model, extraction.facts, text, _on_usage=on_usage
+            )
 
         fact_texts = [f.text for f in extraction.facts]
         embeddings = self._embedder.embed(fact_texts)
@@ -293,12 +308,15 @@ class _MemoryCore:
                 _on_usage=on_usage,
             )
 
-            # Create LEADS_TO edges for session ordering
+            # Session ordering: episodes or LEADS_TO edges
             run = self._config.run_id or sid
-            if run:
-                new_add_ids = [e.memory_id for e in events if e.action == MemoryAction.ADD and e.memory_id]
-                if new_add_ids:
-                    self._link_session_chain(new_add_ids, uid, run)
+            new_add_ids = [e.memory_id for e in events if e.action == MemoryAction.ADD and e.memory_id]
+            if self._config.enable_episodes and events:
+                ep_id = self._create_episode(text, uid, sid, now_ms, extraction, events)
+                if run:
+                    self._link_episode_chain(ep_id, uid, run)
+            elif run and new_add_ids:
+                self._link_session_chain(new_add_ids, uid, run)
 
             if events:
                 self._graph_dirty = True
@@ -511,11 +529,20 @@ class _MemoryCore:
         time_after: int | None = None,
         include_expired: bool = False,
         diverse: bool = False,
+        point_in_time: int | None = None,
         _trace: list[ExplainStep] | None = None,
     ) -> SearchResponse:
         from .temporal import detect_temporal_hints
 
         self._recompute_graph_metrics()
+
+        # Deferred community materialization (requires async context for LLM calls)
+        if hasattr(self, "_pending_communities") and self._pending_communities:
+            from .communities import materialize_communities_async
+
+            uid_for_communities = user_id or self._config.user_id
+            await materialize_communities_async(self._db, self._model, uid_for_communities, self._pending_communities)
+            self._pending_communities = None
 
         on_usage, total = self._make_usage_collector()
         uid = user_id or self._config.user_id
@@ -695,6 +722,18 @@ class _MemoryCore:
                 )
             )
 
+        # Bi-temporal point-in-time filter: only include facts valid at the given moment
+        if point_in_time is not None:
+            before_pit = len(final)
+            final = [r for r in final if _valid_at_point(r, point_in_time)]
+            if _trace is not None:
+                _trace.append(
+                    ExplainStep(
+                        name="point_in_time_filter",
+                        detail={"point_in_time": point_in_time, "before": before_pit, "after": len(final)},
+                    )
+                )
+
         # Topology boost: lightweight structural re-ranking (no LLM call)
         if self._config.enable_topology_boost:
             from .scoring import apply_topology_boost
@@ -758,6 +797,7 @@ class _MemoryCore:
         time_after: int | None = None,
         include_expired: bool = False,
         diverse: bool = False,
+        point_in_time: int | None = None,
     ) -> ExplainResult:
         """Run a search with full pipeline tracing."""
         trace: list[ExplainStep] = []
@@ -770,6 +810,7 @@ class _MemoryCore:
             time_after=time_after,
             include_expired=include_expired,
             diverse=diverse,
+            point_in_time=point_in_time,
             _trace=trace,
         )
 
@@ -822,8 +863,11 @@ class _MemoryCore:
         _on_usage=None,
     ) -> list[MemoryEvent]:
         events: list[MemoryEvent] = []
+        temporal = extraction.temporal_annotations
 
         for i, decision in enumerate(decisions):
+            fact_valid_at, _ = temporal.get(i, (None, None))
+
             if decision.action == MemoryAction.ADD:
                 emb = embeddings[i] if i < len(embeddings) else None
                 memory_id = self._create_memory(
@@ -837,6 +881,7 @@ class _MemoryCore:
                     role,
                     importance=importance,
                     memory_type=memory_type,
+                    valid_at=fact_valid_at,
                 )
                 record_history(
                     self._db,
@@ -853,6 +898,7 @@ class _MemoryCore:
                         actor_id=actor_id,
                         role=role,
                         memory_type=memory_type.value,
+                        valid_at=fact_valid_at,
                     )
                 )
 
@@ -870,6 +916,7 @@ class _MemoryCore:
                     role,
                     importance=importance,
                     memory_type=memory_type,
+                    valid_at=fact_valid_at,
                 )
                 record_history(
                     self._db,
@@ -886,12 +933,16 @@ class _MemoryCore:
                         actor_id=actor_id,
                         role=role,
                         memory_type=memory_type.value,
+                        valid_at=fact_valid_at,
                     )
                 )
 
             elif decision.action == MemoryAction.UPDATE and decision.target_memory_id:
                 # Soft-expiry update: expire old memory, create new one, link with SUPERSEDES
-                old_text = self._expire_memory(decision.target_memory_id, timestamp)
+                # In bi-temporal mode, set invalid_at on old memory to when the new fact became true
+                old_text = self._expire_memory(
+                    decision.target_memory_id, timestamp, invalid_at=fact_valid_at or timestamp
+                )
                 emb = self._embedder.embed([decision.text])[0]
                 new_memory_id = self._create_memory(
                     decision.text,
@@ -904,6 +955,7 @@ class _MemoryCore:
                     role,
                     importance=importance,
                     memory_type=memory_type,
+                    valid_at=fact_valid_at,
                 )
                 try:
                     self._db.create_edge(int(new_memory_id), int(decision.target_memory_id), SUPERSEDES_EDGE)
@@ -938,6 +990,7 @@ class _MemoryCore:
                         actor_id=actor_id,
                         role=role,
                         memory_type=memory_type.value,
+                        valid_at=fact_valid_at,
                     )
                 )
 
@@ -989,6 +1042,7 @@ class _MemoryCore:
         importance: float = 1.0,
         memory_type: MemoryType | str = MemoryType.SEMANTIC,
         learned_at: int | None = None,
+        valid_at: int | None = None,
     ) -> str:
         mtype_val = memory_type.value if isinstance(memory_type, MemoryType) else memory_type
         props: dict = {
@@ -999,6 +1053,8 @@ class _MemoryCore:
             "learned_at": learned_at or timestamp,
             "memory_type": mtype_val,
         }
+        if valid_at is not None:
+            props["valid_at"] = valid_at
         if session_id:
             props["session_id"] = session_id
         if metadata:
@@ -1064,8 +1120,12 @@ class _MemoryCore:
         self._db.delete_node(node_id)
         return old_text
 
-    def _expire_memory(self, memory_id: str, timestamp: int) -> str | None:
-        """Soft-expire a memory by setting expired_at instead of deleting it."""
+    def _expire_memory(self, memory_id: str, timestamp: int, *, invalid_at: int | None = None) -> str | None:
+        """Soft-expire a memory by setting expired_at instead of deleting it.
+
+        When bi-temporal mode is enabled, also sets invalid_at on the node to
+        record when the fact ceased being true in reality.
+        """
         try:
             node_id = int(memory_id)
         except ValueError:
@@ -1079,6 +1139,8 @@ class _MemoryCore:
         old_text = props.get("text", "")
 
         self._db.set_node_property(node_id, "expired_at", timestamp)
+        if self._config.enable_bitemporal and invalid_at is not None:
+            self._db.set_node_property(node_id, "invalid_at", invalid_at)
         return old_text
 
     def _inherit_entity_edges(self, old_memory_id: str, new_memory_id: str) -> None:
@@ -1150,6 +1212,256 @@ class _MemoryCore:
                 self._db.create_edge(int(ordered[i]), int(ordered[i + 1]), LEADS_TO_EDGE, {"sequence": i + 1})
             except Exception:
                 logger.debug("Failed to create LEADS_TO edge %s->%s", ordered[i], ordered[i + 1], exc_info=True)
+
+    # --- Episode provenance ---
+
+    def _create_episode(
+        self,
+        content: str,
+        user_id: str,
+        session_id: str | None,
+        timestamp: int,
+        extraction: ExtractionResult | None,
+        events: list[MemoryEvent],
+    ) -> str:
+        """Create an Episode node and link it to produced memories and mentioned entities."""
+        props: dict = {
+            "content": content,
+            "source": "message",
+            "user_id": user_id,
+            "created_at": timestamp,
+        }
+        if session_id:
+            props["session_id"] = session_id
+        if self._config.run_id:
+            props["run_id"] = self._config.run_id
+
+        node = self._db.create_node([EPISODE_LABEL], props)
+        ep_id = node.id if hasattr(node, "id") else node
+
+        # PRODUCED edges: Episode -> Memory
+        for event in events:
+            if event.memory_id is not None:
+                with contextlib.suppress(Exception):
+                    self._db.create_edge(ep_id, int(event.memory_id), PRODUCED_EDGE)
+
+        # MENTIONS edges: Episode -> Entity
+        if extraction and extraction.entities:
+            for entity in extraction.entities:
+                entity_node = self._find_entity_by_name(entity.name, user_id)
+                if entity_node is not None:
+                    with contextlib.suppress(Exception):
+                        self._db.create_edge(ep_id, entity_node, MENTIONS_EDGE)
+
+        return str(ep_id)
+
+    def _find_entity_by_name(self, name: str, user_id: str) -> int | None:
+        """Find an entity node by name and user_id."""
+        try:
+            query = f"MATCH (e:{ENTITY_LABEL}) WHERE e.name = $name AND e.user_id = $uid RETURN id(e)"
+            rows = self._db.execute(query, {"name": name, "uid": user_id})
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                vals = list(row.values())
+                if vals:
+                    return int(vals[0])
+        except Exception:
+            logger.debug("_find_entity_by_name failed for %s", name, exc_info=True)
+        return None
+
+    def _link_episode_chain(self, episode_id: str, user_id: str, run_id: str) -> None:
+        """Create NEXT_EPISODE edge from the previous episode to this one."""
+        try:
+            nodes = self._db.get_nodes_by_label(EPISODE_LABEL)
+        except Exception:
+            return
+
+        prev_id: str | None = None
+        prev_ts: int = 0
+        for node_id, props in nodes:
+            mid = str(node_id)
+            if mid == episode_id:
+                continue
+            if props.get("user_id") != user_id:
+                continue
+            node_run = props.get("run_id") or props.get("session_id")
+            if node_run != run_id:
+                continue
+            ts = int(props.get("created_at", 0))
+            if ts > prev_ts:
+                prev_ts = ts
+                prev_id = mid
+
+        if prev_id is not None:
+            with contextlib.suppress(Exception):
+                self._db.create_edge(int(prev_id), int(episode_id), NEXT_EPISODE_EDGE)
+
+    def _get_episodes_impl(
+        self,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        limit: int = 50,
+    ) -> list[EpisodeResult]:
+        """Retrieve episode nodes."""
+        uid = user_id or self._config.user_id
+        try:
+            nodes = self._db.get_nodes_by_label(EPISODE_LABEL)
+        except Exception:
+            return []
+
+        episodes: list[EpisodeResult] = []
+        for node_id, props in nodes:
+            if props.get("user_id") != uid:
+                continue
+            if session_id is not None and props.get("session_id") != session_id:
+                continue
+
+            # Collect produced memory IDs
+            produced: list[str] = []
+            mentioned: list[str] = []
+            try:
+                query = f"MATCH (e)-[:{PRODUCED_EDGE}]->(m:{MEMORY_LABEL}) WHERE id(e) = $eid RETURN id(m)"
+                for row in self._db.execute(query, {"eid": node_id}):
+                    if isinstance(row, dict):
+                        vals = list(row.values())
+                        if vals:
+                            produced.append(str(vals[0]))
+            except Exception:
+                pass
+            try:
+                query = f"MATCH (e)-[:{MENTIONS_EDGE}]->(ent:{ENTITY_LABEL}) WHERE id(e) = $eid RETURN ent.name"
+                for row in self._db.execute(query, {"eid": node_id}):
+                    if isinstance(row, dict):
+                        vals = list(row.values())
+                        if vals and vals[0]:
+                            mentioned.append(str(vals[0]))
+            except Exception:
+                pass
+
+            episodes.append(
+                EpisodeResult(
+                    episode_id=str(node_id),
+                    content=props.get("content", ""),
+                    source=props.get("source", "message"),
+                    user_id=uid,
+                    session_id=props.get("session_id"),
+                    run_id=props.get("run_id"),
+                    created_at=props.get("created_at"),
+                    valid_at=props.get("valid_at"),
+                    produced_memories=produced,
+                    mentioned_entities=mentioned,
+                )
+            )
+
+        episodes.sort(key=lambda e: e.created_at or 0)
+        return episodes[:limit]
+
+    def _get_provenance_impl(self, memory_id: str) -> list[EpisodeResult]:
+        """Get the episodes that produced a given memory."""
+        try:
+            mid = int(memory_id)
+        except ValueError:
+            return []
+
+        try:
+            query = f"MATCH (e:{EPISODE_LABEL})-[:{PRODUCED_EDGE}]->(m:{MEMORY_LABEL}) WHERE id(m) = $mid RETURN id(e)"
+            ep_ids: list[int] = []
+            for row in self._db.execute(query, {"mid": mid}):
+                if isinstance(row, dict):
+                    vals = list(row.values())
+                    if vals:
+                        ep_ids.append(int(vals[0]))
+        except Exception:
+            return []
+
+        results: list[EpisodeResult] = []
+        for ep_id in ep_ids:
+            node = self._db.get_node(ep_id)
+            if node is None:
+                continue
+            props = _get_props(node)
+            results.append(
+                EpisodeResult(
+                    episode_id=str(ep_id),
+                    content=props.get("content", ""),
+                    source=props.get("source", "message"),
+                    user_id=props.get("user_id", ""),
+                    session_id=props.get("session_id"),
+                    run_id=props.get("run_id"),
+                    created_at=props.get("created_at"),
+                    valid_at=props.get("valid_at"),
+                )
+            )
+        return results
+
+    def _episode_chain_impl(
+        self,
+        episode_id: str,
+        direction: str = "forward",
+        max_depth: int = 10,
+    ) -> list[EpisodeResult]:
+        """Follow NEXT_EPISODE edges for session replay."""
+        try:
+            start_id = int(episode_id)
+        except ValueError:
+            return []
+
+        results: list[EpisodeResult] = []
+
+        if direction in ("forward", "both"):
+            self._traverse_episodes(start_id, "forward", max_depth, results)
+
+        if direction in ("backward", "both"):
+            backward: list[EpisodeResult] = []
+            self._traverse_episodes(start_id, "backward", max_depth, backward)
+            results = list(reversed(backward)) + results
+
+        return results
+
+    def _traverse_episodes(self, start_id: int, direction: str, max_depth: int, results: list[EpisodeResult]) -> None:
+        current_id = start_id
+        for _ in range(max_depth):
+            if direction == "forward":
+                query = (
+                    f"MATCH (a:{EPISODE_LABEL})-[:{NEXT_EPISODE_EDGE}]->(b:{EPISODE_LABEL}) "
+                    f"WHERE id(a) = $cid RETURN id(b)"
+                )
+            else:
+                query = (
+                    f"MATCH (b:{EPISODE_LABEL})-[:{NEXT_EPISODE_EDGE}]->(a:{EPISODE_LABEL}) "
+                    f"WHERE id(a) = $cid RETURN id(b)"
+                )
+            try:
+                rows = self._db.execute(query, {"cid": current_id})
+            except Exception:
+                break
+            next_id = None
+            for row in rows:
+                if isinstance(row, dict):
+                    vals = list(row.values())
+                    if vals:
+                        next_id = int(vals[0])
+                        break
+            if next_id is None:
+                break
+            node = self._db.get_node(next_id)
+            if node is None:
+                break
+            props = _get_props(node)
+            results.append(
+                EpisodeResult(
+                    episode_id=str(next_id),
+                    content=props.get("content", ""),
+                    source=props.get("source", "message"),
+                    user_id=props.get("user_id", ""),
+                    session_id=props.get("session_id"),
+                    run_id=props.get("run_id"),
+                    created_at=props.get("created_at"),
+                    valid_at=props.get("valid_at"),
+                )
+            )
+            current_id = next_id
 
     def temporal_chain(
         self,
@@ -1313,6 +1625,9 @@ class _MemoryCore:
                 if node_id in owned_ids:
                     with contextlib.suppress(Exception):
                         self._db.set_node_property(node_id, "_community", community_id)
+            # Store louvain result for deferred community materialization
+            if self._config.enable_community_summaries and communities:
+                self._pending_communities = result
         except Exception:
             logger.debug("louvain community detection failed", exc_info=True)
 
@@ -1473,6 +1788,8 @@ class _MemoryCore:
                     memory_type=props.get("memory_type", "semantic"),
                     created_at=props.get("created_at"),
                     expired_at=props.get("expired_at"),
+                    valid_at=props.get("valid_at"),
+                    invalid_at=props.get("invalid_at"),
                 )
             )
         return memories
@@ -1625,6 +1942,22 @@ class _MemoryCore:
         except Exception:
             pass
 
+        ep_count = 0
+        try:
+            ep_nodes = self._db.get_nodes_by_label(EPISODE_LABEL)
+            ep_count = len(ep_nodes)
+        except Exception:
+            pass
+
+        comm_count = 0
+        try:
+            from .types import COMMUNITY_LABEL as _CL
+
+            comm_nodes = self._db.get_nodes_by_label(_CL)
+            comm_count = len(comm_nodes)
+        except Exception:
+            pass
+
         total = semantic + procedural + episodic
         return MemoryStats(
             total_memories=total,
@@ -1633,10 +1966,14 @@ class _MemoryCore:
             episodic_count=episodic,
             entity_count=entity_count,
             relation_count=relation_count,
+            episode_count=ep_count,
+            community_count=comm_count,
             db_info={
                 "memory_node_count": total,
                 "entity_node_count": entity_count,
                 "relation_edge_count": relation_count,
+                "episode_node_count": ep_count,
+                "community_node_count": comm_count,
             },
         )
 
@@ -1653,6 +1990,18 @@ class _MemoryCore:
             return False
         self._db.set_node_property(node_id, "importance", importance)
         return True
+
+
+def _valid_at_point(result: SearchResult, pit: int) -> bool:
+    """Check whether a memory was valid at a given point in time.
+
+    Permissive: memories with no valid_at are always included (backward compat).
+    """
+    if result.valid_at is None:
+        return True
+    if result.valid_at > pit:
+        return False
+    return result.invalid_at is None or result.invalid_at > pit
 
 
 def _extract_actor(parsed: list[Message]) -> tuple[str | None, str | None]:
@@ -1768,6 +2117,7 @@ class MemoryManager(_MemoryCore):
         include_expired: bool = False,
         diverse: bool = False,
         grouped: bool = False,
+        point_in_time: int | None = None,
     ) -> SearchResponse | dict[str, list]:
         """Search memories by semantic similarity and graph context."""
         response = run_sync(
@@ -1783,6 +2133,7 @@ class MemoryManager(_MemoryCore):
                 time_after=time_after,
                 include_expired=include_expired,
                 diverse=diverse,
+                point_in_time=point_in_time,
             )
         )
         if grouped:
@@ -1861,6 +2212,27 @@ class MemoryManager(_MemoryCore):
             max_depth=max_depth,
         )
 
+    def get_episodes(
+        self, user_id: str | None = None, session_id: str | None = None, limit: int = 50
+    ) -> list[EpisodeResult]:
+        """Get episodes, optionally filtered by session."""
+        return self._get_episodes_impl(user_id, session_id=session_id, limit=limit)
+
+    def get_provenance(self, memory_id: str) -> list[EpisodeResult]:
+        """Get the episodes that produced a given memory."""
+        return self._get_provenance_impl(memory_id)
+
+    def episode_chain(self, episode_id: str, direction: str = "forward", max_depth: int = 10) -> list[EpisodeResult]:
+        """Follow NEXT_EPISODE edges for session replay."""
+        return self._episode_chain_impl(episode_id, direction=direction, max_depth=max_depth)
+
+    def get_communities(self, user_id: str | None = None) -> list:
+        """Get all detected communities and their summaries."""
+        from .communities import get_communities as _get_communities
+
+        uid = user_id or self._config.user_id
+        return _get_communities(self._db, uid)
+
     def stats(self) -> MemoryStats:
         """Return database introspection statistics (no LLM calls)."""
         return self._stats_impl()
@@ -1876,6 +2248,7 @@ class MemoryManager(_MemoryCore):
         time_after: int | None = None,
         include_expired: bool = False,
         diverse: bool = False,
+        point_in_time: int | None = None,
     ) -> ExplainResult:
         """Run a search and return a step-by-step pipeline trace."""
         return run_sync(
@@ -1888,6 +2261,7 @@ class MemoryManager(_MemoryCore):
                 time_after=time_after,
                 include_expired=include_expired,
                 diverse=diverse,
+                point_in_time=point_in_time,
             )
         )
 
@@ -1973,6 +2347,7 @@ class AsyncMemoryManager(_MemoryCore):
         include_expired: bool = False,
         diverse: bool = False,
         grouped: bool = False,
+        point_in_time: int | None = None,
     ) -> SearchResponse | dict[str, list]:
         """Search memories by semantic similarity and graph context."""
         response = await self._search(
@@ -1987,6 +2362,7 @@ class AsyncMemoryManager(_MemoryCore):
             time_after=time_after,
             include_expired=include_expired,
             diverse=diverse,
+            point_in_time=point_in_time,
         )
         if grouped:
             return self._group_results_by_session(response)
@@ -2040,6 +2416,27 @@ class AsyncMemoryManager(_MemoryCore):
         """Get the change history for a memory."""
         return self._history_impl(memory_id)
 
+    def get_episodes(
+        self, user_id: str | None = None, session_id: str | None = None, limit: int = 50
+    ) -> list[EpisodeResult]:
+        """Get episodes, optionally filtered by session."""
+        return self._get_episodes_impl(user_id, session_id=session_id, limit=limit)
+
+    def get_provenance(self, memory_id: str) -> list[EpisodeResult]:
+        """Get the episodes that produced a given memory."""
+        return self._get_provenance_impl(memory_id)
+
+    def episode_chain(self, episode_id: str, direction: str = "forward", max_depth: int = 10) -> list[EpisodeResult]:
+        """Follow NEXT_EPISODE edges for session replay."""
+        return self._episode_chain_impl(episode_id, direction=direction, max_depth=max_depth)
+
+    def get_communities(self, user_id: str | None = None) -> list:
+        """Get all detected communities and their summaries."""
+        from .communities import get_communities as _get_communities
+
+        uid = user_id or self._config.user_id
+        return _get_communities(self._db, uid)
+
     def stats(self) -> MemoryStats:
         """Return database introspection statistics (no LLM calls)."""
         return self._stats_impl()
@@ -2055,6 +2452,7 @@ class AsyncMemoryManager(_MemoryCore):
         time_after: int | None = None,
         include_expired: bool = False,
         diverse: bool = False,
+        point_in_time: int | None = None,
     ) -> ExplainResult:
         """Run a search and return a step-by-step pipeline trace."""
         return await self._explain(
@@ -2066,4 +2464,5 @@ class AsyncMemoryManager(_MemoryCore):
             time_after=time_after,
             include_expired=include_expired,
             diverse=diverse,
+            point_in_time=point_in_time,
         )

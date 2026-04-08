@@ -259,7 +259,9 @@ class TestVersionAndHelp:
         main(["--version"])
         out = capsys.readouterr().out
         assert "grafeo-memory" in out
-        assert "0.2.0" in out
+        from grafeo_memory import __version__
+
+        assert __version__ in out
 
     def test_no_command_shows_help(self, capsys):
         main([])

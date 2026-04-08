@@ -5,6 +5,45 @@ All notable changes to grafeo-memory are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - Unreleased
+
+Bi-temporal validity tracking, episode-based provenance, and community summaries for richer temporal knowledge graphs.
+
+### Added
+
+- **Bi-temporal model** (opt-in): every Memory node can now carry `valid_at` (when the fact became true in reality) and `invalid_at` (when it ceased being true), orthogonal to the existing system-time properties `created_at`/`expired_at`. Enable with `enable_bitemporal=True`
+- **Temporal annotation extraction**: new LLM step parses real-world dates from message context (ISO-8601, year-only, relative dates) and attaches them to extracted facts. New module `extraction/temporal.py` with `annotate_temporal_async()`
+- **Point-in-time queries**: `search(query, point_in_time=epoch_ms)` filters to facts that were valid at a specific moment. Memories with no `valid_at` are included permissively (backward compatible)
+- **Point-in-time hint detection**: `detect_temporal_hints()` now recognizes "as of", "at that time", "back then", "in YYYY" patterns and sets `point_in_time_hint=True` with automatic expired-memory inclusion
+- **Episode provenance** (opt-in): `add()` creates `:Episode` nodes storing the raw message text, linked to produced memories via `PRODUCED` edges and to extracted entities via `MENTIONS` edges. Enable with `enable_episodes=True`
+- **Session replay via episodes**: `NEXT_EPISODE` edges chain episodes within a run. When episodes are enabled, `LEADS_TO` edges between memories are no longer created (episodes handle session ordering)
+- **`get_episodes()`**: retrieve all episodes for a user, optionally filtered by `session_id`
+- **`get_provenance(memory_id)`**: trace any memory back to the raw episode that produced it
+- **`episode_chain(episode_id, direction)`**: follow `NEXT_EPISODE` edges forward, backward, or both for session replay
+- **Community summaries** (opt-in): after Louvain community detection, creates `:Community` nodes with LLM-generated `name` and `summary` for entity clusters (>= 2 members). Lazy materialization on next `search()`. Enable with `enable_community_summaries=True` (requires `enable_graph_algorithms=True`)
+- **`get_communities()`**: retrieve all detected communities and their summaries
+- **Community context in search**: relevant community summaries are discoverable via `get_community_context()` for entity-based lookups
+- New node labels: `Episode`, `Community`
+- New edge types: `PRODUCED`, `MENTIONS`, `NEXT_EPISODE`, `HAS_MEMBER`
+- New config options: `enable_bitemporal`, `enable_episodes`, `enable_community_summaries`
+- New types: `EpisodeResult`, `CommunityInfo`, `TemporalAnnotation`, `TemporalAnnotationOutput`, `CommunitySummaryOutput`
+- New exports: `EPISODE_LABEL`, `PRODUCED_EDGE`, `MENTIONS_EDGE`, `NEXT_EPISODE_EDGE`, `COMMUNITY_LABEL`, `HAS_MEMBER_EDGE`, `EpisodeResult`, `CommunityInfo`
+- New modules: `extraction/temporal.py`, `communities.py`
+- New prompts: `TEMPORAL_ANNOTATION_SYSTEM/USER`, `COMMUNITY_SUMMARY_SYSTEM/USER`
+
+### Changed
+
+- `SearchResult` gains two new fields: `valid_at`, `invalid_at` (both default `None`, backward compatible)
+- `MemoryEvent` gains `valid_at` field (default `None`, backward compatible)
+- `ExtractionResult` gains `temporal_annotations` field (default empty dict, backward compatible)
+- `MemoryStats` gains `episode_count` and `community_count` fields (both default 0)
+- `search()`, `explain()` gain `point_in_time` keyword parameter on both `MemoryManager` and `AsyncMemoryManager`
+- `_expire_memory()` sets `invalid_at` on the expired node when bi-temporal mode is enabled
+- `_execute_decisions()` passes `valid_at` from temporal annotations to new memories and sets `invalid_at` on superseded memories
+- `_stats_impl()` now counts Episode and Community nodes
+- `db_info` in stats includes `episode_node_count` and `community_node_count`
+- MCP `memory_search` tool gains `point_in_time` parameter
+
 ## [0.2.1] - 2026-04-07
 
 Test quality, error surfacing, documentation improvements, and shared database support.
@@ -233,6 +272,8 @@ Initial release.
 - **Windows async compatibility**: persistent `asyncio.Runner` and `ProactorEventLoop` safety net for Python 3.13+
 - 230 tests, 83% coverage
 
+[Unreleased]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.3...v0.1.4

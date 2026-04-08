@@ -69,6 +69,8 @@ def vector_search(
                 learned_at=props.get("learned_at"),
                 session_id=props.get("session_id"),
                 expired_at=props.get("expired_at"),
+                valid_at=props.get("valid_at"),
+                invalid_at=props.get("invalid_at"),
             )
         )
 
@@ -180,6 +182,8 @@ def hybrid_search(
                 learned_at=props.get("learned_at"),
                 session_id=props.get("session_id"),
                 expired_at=props.get("expired_at"),
+                valid_at=props.get("valid_at"),
+                invalid_at=props.get("invalid_at"),
             )
         )
 
@@ -279,6 +283,8 @@ def diverse_search(
                 learned_at=props.get("learned_at"),
                 session_id=props.get("session_id"),
                 expired_at=props.get("expired_at"),
+                valid_at=props.get("valid_at"),
+                invalid_at=props.get("invalid_at"),
             )
         )
 

@@ -84,6 +84,33 @@ class RelationReconciliationOutput(BaseModel):
     delete: list[RelationDeleteItem]
 
 
+# --- Temporal annotation ---
+
+
+class TemporalAnnotation(BaseModel):
+    """Temporal annotation for a single extracted fact."""
+
+    fact_index: int
+    valid_at: str | None = None
+    invalid_at: str | None = None
+
+
+class TemporalAnnotationOutput(BaseModel):
+    """Output schema for temporal annotation of extracted facts."""
+
+    annotations: list[TemporalAnnotation]
+
+
+# --- Community summaries ---
+
+
+class CommunitySummaryOutput(BaseModel):
+    """Output schema for community summary generation."""
+
+    name: str
+    summary: str
+
+
 # --- Summarization / consolidation ---
 
 

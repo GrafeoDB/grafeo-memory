@@ -16,11 +16,19 @@ from .scoring import (
 )
 from .temporal import TemporalHints, detect_temporal_hints
 from .types import (
+    COMMUNITY_LABEL,
+    EPISODE_LABEL,
+    HAS_MEMBER_EDGE,
     LEADS_TO_EDGE,
+    MENTIONS_EDGE,
+    NEXT_EPISODE_EDGE,
+    PRODUCED_EDGE,
     SUPERSEDES_EDGE,
     AddResult,
+    CommunityInfo,
     EntitiesOutput,
     Entity,
+    EpisodeResult,
     ExplainResult,
     ExplainStep,
     ExtractionResult,
@@ -39,13 +47,21 @@ from .types import (
 )
 
 __all__ = [
+    "COMMUNITY_LABEL",
+    "EPISODE_LABEL",
+    "HAS_MEMBER_EDGE",
     "LEADS_TO_EDGE",
+    "MENTIONS_EDGE",
+    "NEXT_EPISODE_EDGE",
+    "PRODUCED_EDGE",
     "SUPERSEDES_EDGE",
     "AddResult",
     "AsyncMemoryManager",
+    "CommunityInfo",
     "EmbeddingClient",
     "EntitiesOutput",
     "Entity",
+    "EpisodeResult",
     "ExplainResult",
     "ExplainStep",
     "ExtractionResult",
@@ -80,4 +96,4 @@ __all__ = [
     "detect_temporal_hints",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.2.2"

@@ -96,8 +96,16 @@ class MemoryConfig:
     cross_session_factor: float = 0.0
     # Graph algorithm-based scoring (opt-in, replaces hand-coded topology)
     enable_graph_algorithms: bool = False
+    # Bi-temporal model: extract real-world validity times from facts (opt-in)
+    enable_bitemporal: bool = False
+    # Episode provenance: store raw messages as Episode nodes with provenance edges (opt-in)
+    enable_episodes: bool = False
+    # Community summaries: LLM-generated summaries for entity clusters (opt-in, requires enable_graph_algorithms)
+    enable_community_summaries: bool = False
 
     def __post_init__(self) -> None:
+        if self.enable_community_summaries and not self.enable_graph_algorithms:
+            raise ValueError("enable_community_summaries requires enable_graph_algorithms=True")
         if self.embedding_dimensions <= 0:
             raise ValueError(f"embedding_dimensions must be positive, got {self.embedding_dimensions}")
         if not (0.0 <= self.reconciliation_threshold <= 1.0):
@@ -173,6 +181,7 @@ class MemoryEvent:
     actor_id: str | None = None
     role: str | None = None
     memory_type: str = "semantic"
+    valid_at: int | None = None
 
 
 @dataclass
@@ -195,6 +204,8 @@ class SearchResult:
     learned_at: int | None = None
     session_id: str | None = None
     expired_at: int | None = None
+    valid_at: int | None = None
+    invalid_at: int | None = None
 
 
 @dataclass
@@ -237,6 +248,7 @@ class ExtractionResult:
     facts: list[Fact] = field(default_factory=list)
     entities: list[Entity] = field(default_factory=list)
     relations: list[Relation] = field(default_factory=list)
+    temporal_annotations: dict[int, tuple[int | None, int | None]] = field(default_factory=dict)
 
 
 @dataclass
@@ -249,6 +261,8 @@ class MemoryStats:
     episodic_count: int = 0
     entity_count: int = 0
     relation_count: int = 0
+    episode_count: int = 0
+    community_count: int = 0
     db_info: dict = field(default_factory=dict)
 
 
@@ -272,11 +286,44 @@ class ExplainResult:
 # Graph schema constants
 MEMORY_LABEL = "Memory"
 ENTITY_LABEL = "Entity"
+EPISODE_LABEL = "Episode"
 HAS_ENTITY_EDGE = "HAS_ENTITY"
 RELATION_EDGE = "RELATION"
 DERIVED_FROM_EDGE = "DERIVED_FROM"
 SUPERSEDES_EDGE = "SUPERSEDES"
 LEADS_TO_EDGE = "LEADS_TO"
+PRODUCED_EDGE = "PRODUCED"
+MENTIONS_EDGE = "MENTIONS"
+NEXT_EPISODE_EDGE = "NEXT_EPISODE"
+COMMUNITY_LABEL = "Community"
+HAS_MEMBER_EDGE = "HAS_MEMBER"
+
+
+@dataclass
+class EpisodeResult:
+    """A raw episode with provenance information."""
+
+    episode_id: str
+    content: str
+    source: str
+    user_id: str
+    session_id: str | None = None
+    run_id: str | None = None
+    created_at: int | None = None
+    valid_at: int | None = None
+    produced_memories: list[str] = field(default_factory=list)
+    mentioned_entities: list[str] = field(default_factory=list)
+
+
+@dataclass
+class CommunityInfo:
+    """A detected community with its LLM summary."""
+
+    community_id: str
+    name: str
+    summary: str
+    member_count: int
+    member_entities: list[str] = field(default_factory=list)
 
 
 class AddResult(list):
@@ -300,17 +347,25 @@ class SearchResponse(list):
 
 
 __all__ = [
+    "COMMUNITY_LABEL",
     "DERIVED_FROM_EDGE",
     "ENTITY_LABEL",
+    "EPISODE_LABEL",
     "HAS_ENTITY_EDGE",
+    "HAS_MEMBER_EDGE",
     "LEADS_TO_EDGE",
     "MEMORY_LABEL",
+    "MENTIONS_EDGE",
+    "NEXT_EPISODE_EDGE",
+    "PRODUCED_EDGE",
     "RELATION_EDGE",
     "SUPERSEDES_EDGE",
     "AddResult",
+    "CommunityInfo",
     "EntitiesOutput",
     "Entity",
     "EntityItem",
+    "EpisodeResult",
     "ExplainResult",
     "ExplainStep",
     "ExtractionResult",

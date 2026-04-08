@@ -148,6 +148,8 @@ def graph_search(
                             learned_at=mem_props.get("learned_at"),
                             session_id=mem_props.get("session_id"),
                             expired_at=mem_props.get("expired_at"),
+                            valid_at=mem_props.get("valid_at"),
+                            invalid_at=mem_props.get("invalid_at"),
                         )
                     )
             except Exception:
@@ -200,6 +202,8 @@ def graph_search(
                         learned_at=mem_props.get("learned_at"),
                         session_id=mem_props.get("session_id"),
                         expired_at=mem_props.get("expired_at"),
+                        valid_at=mem_props.get("valid_at"),
+                        invalid_at=mem_props.get("invalid_at"),
                     )
                 )
         except Exception:

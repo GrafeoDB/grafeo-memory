@@ -174,10 +174,15 @@ class TestSharedDBStats:
         stats = manager.stats()
 
         # Should not contain keys from raw db.info() like "node_count" or "total_nodes"
+        allowed = (
+            "memory_node_count",
+            "entity_node_count",
+            "relation_edge_count",
+            "episode_node_count",
+            "community_node_count",
+        )
         for key in stats.db_info:
-            assert key in ("memory_node_count", "entity_node_count", "relation_edge_count"), (
-                f"Unexpected key in db_info: {key}"
-            )
+            assert key in allowed, f"Unexpected key in db_info: {key}"
 
         manager.close()
 
