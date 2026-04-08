@@ -1371,7 +1371,10 @@ class _MemoryCore:
         try:
             gn = self._config.graph_name
             if gn:
-                query = f"MATCH (e:{ENTITY_LABEL}) WHERE e.name = $name AND e.user_id = $uid AND e.graph_name = $gn RETURN id(e)"
+                query = (
+                    f"MATCH (e:{ENTITY_LABEL}) WHERE e.name = $name AND e.user_id = $uid "
+                    f"AND e.graph_name = $gn RETURN id(e)"
+                )
                 params = {"name": entity.name, "uid": user_id, "gn": gn}
             else:
                 query = f"MATCH (e:{ENTITY_LABEL}) WHERE e.name = $name AND e.user_id = $uid RETURN id(e)"

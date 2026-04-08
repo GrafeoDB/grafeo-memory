@@ -9,7 +9,6 @@ import grafeo
 from mock_llm import MockEmbedder, make_test_model
 
 from grafeo_memory import MemoryAction, MemoryConfig, MemoryManager
-from grafeo_memory.search.vector import _get_props
 from grafeo_memory.types import ENTITY_LABEL, MEMORY_LABEL
 
 
@@ -246,7 +245,7 @@ class TestGraphNameTemporalChain:
 
         events_a = mgr_a.add("Alice works at Acme Corp")
         mgr_b.add("Bob likes hiking")
-        events_a2 = mgr_a.add("Alice got promoted")
+        mgr_a.add("Alice got promoted")
 
         # Get chain from graph_a's first memory
         first_id = events_a[0].memory_id

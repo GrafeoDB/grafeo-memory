@@ -100,7 +100,8 @@ def graph_search(
             with contextlib.suppress(Exception):
                 params = {"name": entity.name.lower(), "uid": user_id, **gn_params}
                 rows = db.execute(
-                    f"MATCH (e:{ENTITY_LABEL}) WHERE toLower(e.name) = $name AND e.user_id = $uid{gn_filter} RETURN id(e)",
+                    f"MATCH (e:{ENTITY_LABEL}) WHERE toLower(e.name) = $name "
+                    f"AND e.user_id = $uid{gn_filter} RETURN id(e)",
                     params,
                 )
                 entity_nids = [int(next(iter(r.values()))) for r in rows if isinstance(r, dict) and r]
