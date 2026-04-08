@@ -55,6 +55,7 @@ class MemoryConfig:
     session_id: str | None = None
     agent_id: str | None = None
     run_id: str | None = None
+    graph_name: str | None = None
     reconciliation_threshold: float = 0.3
     search_min_score: float = 0.0
     agreement_bonus: float = 0.1
