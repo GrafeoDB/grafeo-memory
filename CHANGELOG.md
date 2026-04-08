@@ -5,9 +5,9 @@ All notable changes to grafeo-memory are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.1] - 2026-04-08
+## [Unreleased] - 0.2.2
 
-Temporal knowledge graph, shared database support, and test quality improvements. Adds bi-temporal validity tracking, episode-based provenance, and community summaries, inspired by Zep/Graphiti's temporal architecture, adapted for GrafeoDB's embedded graph engine.
+Bi-temporal validity tracking, episode-based provenance, and community summaries for richer temporal knowledge graphs.
 
 ### Added
 
@@ -23,8 +23,6 @@ Temporal knowledge graph, shared database support, and test quality improvements
 - **Community summaries** (opt-in): after Louvain community detection, creates `:Community` nodes with LLM-generated `name` and `summary` for entity clusters (>= 2 members). Lazy materialization on next `search()`. Enable with `enable_community_summaries=True` (requires `enable_graph_algorithms=True`)
 - **`get_communities()`**: retrieve all detected communities and their summaries
 - **Community context in search**: relevant community summaries are discoverable via `get_community_context()` for entity-based lookups
-- **Shared database support**: `MemoryManager` and `AsyncMemoryManager` accept an optional `db=` keyword argument to inject an existing `GrafeoDB` instance instead of creating one internally. `close()` respects ownership and leaves externally provided databases open ([#18](https://github.com/GrafeoDB/grafeo-memory/issues/18), [#19](https://github.com/GrafeoDB/grafeo-memory/pull/19), thanks [@Michaelzag](https://github.com/Michaelzag))
-- **Multi-tenant safety**: all internal operations are now scoped to Memory and Entity nodes, making it safe to share a database with non-memory data
 - New node labels: `Episode`, `Community`
 - New edge types: `PRODUCED`, `MENTIONS`, `NEXT_EPISODE`, `HAS_MEMBER`
 - New config options: `enable_bitemporal`, `enable_episodes`, `enable_community_summaries`
@@ -32,13 +30,6 @@ Temporal knowledge graph, shared database support, and test quality improvements
 - New exports: `EPISODE_LABEL`, `PRODUCED_EDGE`, `MENTIONS_EDGE`, `NEXT_EPISODE_EDGE`, `COMMUNITY_LABEL`, `HAS_MEMBER_EDGE`, `EpisodeResult`, `CommunityInfo`
 - New modules: `extraction/temporal.py`, `communities.py`
 - New prompts: `TEMPORAL_ANNOTATION_SYSTEM/USER`, `COMMUNITY_SUMMARY_SYSTEM/USER`
-
-### Fixed
-
-- **Graph metrics pollution**: `_recompute_graph_metrics()` now writes `_pagerank`, `_betweenness`, `_community` only to Memory/Entity nodes instead of every node in the database
-- **Unlabeled Cypher queries**: `temporal_chain()` and `_get_node_relations()` now require `:Memory` labels on match patterns, preventing traversal from foreign nodes
-- **N+1 entity lookup**: `_find_or_create_entity` and `graph_search` replaced global `find_nodes_by_property` + Python filtering with single label-scoped Cypher queries, reducing FFI crossings
-- **Stats data leak**: `_stats_impl()` no longer exposes raw `db.info()`, returning only memory-scoped counts. MCP `memory://stats` resource now delegates to the manager's scoped stats
 
 ### Changed
 
@@ -52,10 +43,42 @@ Temporal knowledge graph, shared database support, and test quality improvements
 - `_stats_impl()` now counts Episode and Community nodes
 - `db_info` in stats includes `episode_node_count` and `community_node_count`
 - MCP `memory_search` tool gains `point_in_time` parameter
+
+## [0.2.1] - 2026-04-07
+
+Test quality, error surfacing, documentation improvements, and shared database support.
+
+### Added
+
+- **Shared database support**: `MemoryManager` and `AsyncMemoryManager` accept an optional `db=` keyword argument to inject an existing `GrafeoDB` instance instead of creating one internally. `close()` respects ownership and leaves externally provided databases open ([#18](https://github.com/GrafeoDB/grafeo-memory/issues/18), [#19](https://github.com/GrafeoDB/grafeo-memory/pull/19), thanks [@Michaelzag](https://github.com/Michaelzag))
+- **Multi-tenant safety**: all internal operations are now scoped to Memory and Entity nodes, making it safe to share a database with non-memory data
+
+### Fixed
+
+- **Graph metrics pollution**: `_recompute_graph_metrics()` now writes `_pagerank`, `_betweenness`, `_community` only to Memory/Entity nodes instead of every node in the database
+- **Unlabeled Cypher queries**: `temporal_chain()` and `_get_node_relations()` now require `:Memory` labels on match patterns, preventing traversal from foreign nodes
+- **N+1 entity lookup**: `_find_or_create_entity` and `graph_search` replaced global `find_nodes_by_property` + Python filtering with single label-scoped Cypher queries, reducing FFI crossings
+- **Stats data leak**: `_stats_impl()` no longer exposes raw `db.info()`, returning only memory-scoped counts. MCP `memory://stats` resource now delegates to the manager's scoped stats
+- **Error surfacing tests**: broken embedder on add/search now verified to raise, not silently return empty results
+- **Persistence lifecycle tests**: write, close, reopen round-trip with `tmp_path`
+- **Multi-session regression tests**: sequential open/close/open guards against event loop corruption
+- **Concurrency tests**: concurrent async adds for same user (lock verification) and different users (isolation)
+- **Reconciliation boundary test**: controlled embeddings at threshold boundary verify UPDATE triggers
+- **History ordering test**: LEADS_TO chain verified for session-order retrieval
+- **Delete cascade test**: orphaned entity behavior after memory deletion documented
+- **Memory type filter test**: search with `memory_type` filter verified
+- **Summarize test**: non-empty summary from related memories
+- **MCP tool smoke tests**: all tool functions imported and called with mock context
+
+### Changed
+
+- `test_search_with_broken_embedder` now uses `pytest.raises` instead of silently passing
+- Concurrency tests use `async with` context manager for guaranteed cleanup
+- Error surfacing tests wrapped in `try/finally` for manager cleanup
 - Shared `make_manager` helper extracted to `conftest.py`
 - README: added model compatibility table (OpenAI, Anthropic, Mistral, Groq, Google)
 - README: documented reconciliation threshold tuning and `history()` return type
-- 496 tests passing, 79% coverage
+- 435 tests passing
 
 ## [0.2.0] - 2026-03-26
 
@@ -249,6 +272,7 @@ Initial release.
 - **Windows async compatibility**: persistent `asyncio.Runner` and `ProactorEventLoop` safety net for Python 3.13+
 - 230 tests, 83% coverage
 
+[Unreleased]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.4...v0.1.5
