@@ -77,7 +77,7 @@ class TestGraphNameWriteScoping:
     def test_batch_add_stamps_graph_name(self):
         db = grafeo.GrafeoDB()
         mgr = _make_manager(db, "batch_graph", [_extraction()])
-        mgr.add("Alice works at Acme Corp", infer=False)
+        mgr.add_batch(["Alice works at Acme Corp", "Bob likes hiking"], infer=False)
 
         for _nid, props in db.get_nodes_by_label(MEMORY_LABEL):
             assert props.get("graph_name") == "batch_graph"

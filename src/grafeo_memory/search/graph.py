@@ -166,7 +166,7 @@ def graph_search(
     if search_depth >= 2 and entities:
         entity_names = [e.name for e in entities]
         try:
-            two_hop_gn = " AND e1.graph_name = $gn AND m.graph_name = $gn" if graph_name else ""
+            two_hop_gn = " AND e1.graph_name = $gn AND e2.graph_name = $gn AND m.graph_name = $gn" if graph_name else ""
             two_hop_query = (
                 f"MATCH (e1:{ENTITY_LABEL})-[:{RELATION_EDGE}]->(e2:{ENTITY_LABEL})"
                 f"<-[:{HAS_ENTITY_EDGE}]-(m:{MEMORY_LABEL}) "
