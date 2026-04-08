@@ -23,6 +23,12 @@ _TIMEDIFF_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
+# Keywords that suggest a point-in-time query (bi-temporal)
+_POINT_IN_TIME_KEYWORDS = re.compile(
+    r"\b(as of|at that time|back then|at the time|in \d{4})\b",
+    re.IGNORECASE,
+)
+
 # Any temporal signal at all (superset)
 _ANY_TEMPORAL = re.compile(
     r"\b(when|before|after|during|since|until|first|last|earliest|latest|"
@@ -39,6 +45,7 @@ class TemporalHints:
     sort_chronologically: bool = False
     is_temporal: bool = False
     expand_limit: bool = False
+    point_in_time_hint: bool = False
     signals: list[str] = field(default_factory=list)
 
 
@@ -65,6 +72,13 @@ def detect_temporal_hints(query: str) -> TemporalHints:
         hints.is_temporal = True
         hints.expand_limit = True
         hints.signals.append("timediff")
+
+    if _POINT_IN_TIME_KEYWORDS.search(query):
+        hints.point_in_time_hint = True
+        hints.is_temporal = True
+        hints.expand_limit = True
+        hints.include_expired = True
+        hints.signals.append("point_in_time")
 
     if not hints.is_temporal and _ANY_TEMPORAL.search(query):
         hints.is_temporal = True

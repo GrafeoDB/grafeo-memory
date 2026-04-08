@@ -236,6 +236,58 @@ Consolidate these {count} memories into fewer entries, grouped by topic:
 {memories}"""
 
 
+# --- Temporal annotation (bi-temporal) ---
+
+TEMPORAL_ANNOTATION_SYSTEM = """\
+You are a temporal annotation assistant. Given a list of extracted facts and the \
+original text, identify when each fact became true in reality (valid_at) and, if \
+mentioned, when it ceased being true (invalid_at).
+
+Rules:
+- Return dates in ISO-8601 format (YYYY-MM-DD) when a specific date is mentioned \
+or clearly implied.
+- For relative dates ("last week", "in 2020", "three months ago"), convert to \
+approximate ISO-8601 using the provided reference date.
+- If no temporal information is available for a fact, set valid_at to null.
+- invalid_at should only be set when the text explicitly states the fact is no \
+longer true (e.g., "used to", "until", "stopped", "left in 2023").
+- Each annotation must reference a fact by its 0-based index.
+- Only annotate facts that have clear temporal signals. Do not guess."""
+
+TEMPORAL_ANNOTATION_USER = """\
+Today's date: {today}
+
+ORIGINAL TEXT:
+{text}
+
+EXTRACTED FACTS:
+{facts}
+
+Annotate each fact with temporal information."""
+
+
+# --- Community summaries ---
+
+COMMUNITY_SUMMARY_SYSTEM = """\
+You are a knowledge graph summarizer. Given a group of related entities and their \
+relationships, generate a concise name and summary for this community.
+
+Rules:
+- The name should be 2-5 words describing the group's theme (e.g., "Work at Acme Corp").
+- The summary should be 1-3 sentences capturing the key facts about this group.
+- Focus on what connects these entities.
+- Do not invent facts not implied by the entities and relations."""
+
+COMMUNITY_SUMMARY_USER = """\
+ENTITIES:
+{entities}
+
+RELATIONSHIPS:
+{relations}
+
+Generate a name and summary for this community of related entities."""
+
+
 # --- Image description (vision) ---
 
 IMAGE_DESCRIBE_SYSTEM = """\

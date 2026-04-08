@@ -104,6 +104,7 @@ async def memory_search(
     k: int = 10,
     memory_type: str | None = None,
     min_score: float | None = None,
+    point_in_time: int | None = None,
     ctx: Context[ServerSession, AppContext] | None = None,
 ) -> str:
     """Search memories using hybrid vector similarity and graph context.
@@ -119,6 +120,7 @@ async def memory_search(
         k: Maximum number of results to return (default 10).
         memory_type: Filter by type: "semantic", "procedural", "episodic", or null for all.
         min_score: Minimum score threshold (0.0-1.0). Results below this are excluded.
+        point_in_time: Epoch milliseconds. Only return facts valid at this moment (bi-temporal).
 
     Returns:
         JSON with results list (each with memory_id, text, score, metadata).
@@ -130,7 +132,9 @@ async def memory_search(
     assert ctx is not None
     manager = ctx.request_context.lifespan_context.manager
     try:
-        results = await manager.search(query, user_id=user_id, k=k, memory_type=memory_type, min_score=min_score)
+        results = await manager.search(
+            query, user_id=user_id, k=k, memory_type=memory_type, min_score=min_score, point_in_time=point_in_time
+        )
         return json.dumps({"results": [_serialize(r) for r in results]}, default=str)
     except Exception as exc:
         return json.dumps({"error": str(exc)})
