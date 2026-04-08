@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from mock_llm import MockEmbedder, make_test_model
+from mock_llm import MockEmbedder, make_error_model, make_test_model
 
 from grafeo_memory import MemoryConfig, MemoryManager, detect_temporal_hints
-from grafeo_memory.extraction.temporal import _parse_date_to_epoch_ms
+from grafeo_memory.extraction.temporal import (
+    _parse_date_to_epoch_ms,
+    annotate_temporal,
+    annotate_temporal_async,
+)
+from grafeo_memory.types import Fact
 
 
 def _make_manager(outputs, dims=16, **config_kwargs):
@@ -152,9 +157,11 @@ class TestBiTemporalAdd:
             [
                 _extraction_output(["alice now works at globex"]),
                 _temporal_annotation_output([{"fact_index": 0, "valid_at": "2024-03-01", "invalid_at": None}]),
-                {"decisions": [
-                    {"action": "update", "text": "alice now works at globex", "target_memory_id": old_memory_id},
-                ]},
+                {
+                    "decisions": [
+                        {"action": "update", "text": "alice now works at globex", "target_memory_id": old_memory_id},
+                    ]
+                },
             ],
             enable_bitemporal=True,
             reconciliation_threshold=0.0,
@@ -326,3 +333,48 @@ class TestPointInTimeHints:
     def test_no_false_positive(self):
         hints = detect_temporal_hints("Where does Alice work now?")
         assert not hints.point_in_time_hint
+
+
+# ---------------------------------------------------------------------------
+# _parse_date_to_epoch_ms: edge cases for year-only overflow
+# ---------------------------------------------------------------------------
+
+
+class TestParseDateEdgeCases:
+    def test_year_overflow_returns_none(self):
+        assert _parse_date_to_epoch_ms("9999999999") is None
+
+    def test_year_zero_returns_none(self):
+        # year 0 raises ValueError from datetime()
+        assert _parse_date_to_epoch_ms("0000") is None
+
+
+# ---------------------------------------------------------------------------
+# annotate_temporal_async: error / edge-case paths
+# ---------------------------------------------------------------------------
+
+
+class TestAnnotateTemporalAsync:
+    def test_empty_facts_returns_empty(self):
+        import asyncio
+
+        model = make_test_model([])
+        result = asyncio.run(annotate_temporal_async(model, [], "some text"))
+        assert result == {}
+
+    def test_llm_error_returns_empty(self):
+        import asyncio
+
+        model = make_error_model()
+        facts = [Fact(text="alice joined acme in 2024")]
+        result = asyncio.run(annotate_temporal_async(model, facts, "alice joined acme in 2024"))
+        assert result == {}
+
+    def test_sync_wrapper(self):
+        model = make_test_model([{"annotations": [{"fact_index": 0, "valid_at": "2024-06-01", "invalid_at": None}]}])
+        facts = [Fact(text="alice joined acme")]
+        result = annotate_temporal(model, facts, "alice joined acme")
+        assert 0 in result
+        valid_ms, invalid_ms = result[0]
+        assert valid_ms is not None
+        assert invalid_ms is None

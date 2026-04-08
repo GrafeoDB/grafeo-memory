@@ -109,9 +109,7 @@ class TestCommunityMaterialization:
             ]
         )
 
-        result = asyncio.run(
-            materialize_communities_async(db, model, "test_user", louvain_result)
-        )
+        result = asyncio.run(materialize_communities_async(db, model, "test_user", louvain_result))
 
         assert len(result) == 2
         names = {c.name for c in result}
@@ -129,9 +127,7 @@ class TestCommunityMaterialization:
         louvain_result = {"communities": {e1_id: 0}}
         model = make_test_model([])
 
-        result = asyncio.run(
-            materialize_communities_async(db, model, "test_user", louvain_result)
-        )
+        result = asyncio.run(materialize_communities_async(db, model, "test_user", louvain_result))
         assert len(result) == 0
 
     def test_community_not_created_when_disabled(self):
@@ -173,9 +169,7 @@ class TestGetCommunities:
             ]
         )
 
-        asyncio.run(
-            materialize_communities_async(db, model, "test_user", louvain_result)
-        )
+        asyncio.run(materialize_communities_async(db, model, "test_user", louvain_result))
 
         communities = get_communities(db, "test_user")
         assert len(communities) == 2
@@ -214,9 +208,7 @@ class TestCommunityContext:
             ]
         )
 
-        asyncio.run(
-            materialize_communities_async(db, model, "test_user", louvain_result)
-        )
+        asyncio.run(materialize_communities_async(db, model, "test_user", louvain_result))
 
         # Query for "alice" -> should find the Acme Team community
         context = get_community_context(db, ["alice"], "test_user")
@@ -242,9 +234,7 @@ class TestCommunityContext:
             ]
         )
 
-        asyncio.run(
-            materialize_communities_async(db, model, "test_user", louvain_result)
-        )
+        asyncio.run(materialize_communities_async(db, model, "test_user", louvain_result))
 
         context = get_community_context(db, ["unknown_person"], "test_user")
         assert len(context) == 0
@@ -277,11 +267,139 @@ class TestCommunityStats:
             ]
         )
 
-        asyncio.run(
-            materialize_communities_async(db, model, "test_user", louvain_result)
-        )
+        asyncio.run(materialize_communities_async(db, model, "test_user", louvain_result))
 
         manager = _make_manager([], db=db)
         stats = manager.stats()
         assert stats.community_count == 2
         manager.close()
+
+
+# ---------------------------------------------------------------------------
+# Edge cases and error paths
+# ---------------------------------------------------------------------------
+
+
+class TestCommunityEdgeCases:
+    def test_empty_communities_map(self):
+        """Empty communities dict returns empty list."""
+        import asyncio
+
+        db = grafeo.GrafeoDB()
+        model = make_test_model([])
+        result = asyncio.run(materialize_communities_async(db, model, "test_user", {"communities": {}}))
+        assert result == []
+
+    def test_empty_louvain_result(self):
+        """Missing 'communities' key returns empty list."""
+        import asyncio
+
+        db = grafeo.GrafeoDB()
+        model = make_test_model([])
+        result = asyncio.run(materialize_communities_async(db, model, "test_user", {}))
+        assert result == []
+
+    def test_unchanged_membership_reuses_existing(self):
+        """Re-running with same membership skips LLM re-summarization."""
+        import asyncio
+
+        db = grafeo.GrafeoDB()
+        clusters = _setup_entity_graph(db)
+
+        louvain_result = {
+            "communities": {**{nid: 0 for nid in clusters["cluster1"]}},
+        }
+
+        model1 = make_test_model([{"name": "Acme Team", "summary": "Alice and Bob at Acme."}])
+        result1 = asyncio.run(materialize_communities_async(db, model1, "test_user", louvain_result))
+        assert len(result1) == 1
+
+        # Re-run with same membership: no LLM call needed (model has no outputs left)
+        model2 = make_test_model([])
+        result2 = asyncio.run(materialize_communities_async(db, model2, "test_user", louvain_result))
+        assert len(result2) == 1
+        assert result2[0].name == "Acme Team"
+
+    def test_changed_membership_re_summarizes(self):
+        """When member count changes, community is re-summarized."""
+        import asyncio
+
+        db = grafeo.GrafeoDB()
+        clusters = _setup_entity_graph(db)
+
+        # First run: 3 members
+        louvain_result = {"communities": {**{nid: 0 for nid in clusters["cluster1"]}}}
+        model1 = make_test_model([{"name": "Acme Team", "summary": "Original summary."}])
+        result1 = asyncio.run(materialize_communities_async(db, model1, "test_user", louvain_result))
+        assert len(result1) == 1
+
+        # Second run: 2 members (different count triggers re-summary)
+        louvain_result2 = {"communities": {nid: 0 for nid in clusters["cluster1"][:2]}}
+        model2 = make_test_model([{"name": "Acme Duo", "summary": "Updated summary."}])
+        result2 = asyncio.run(materialize_communities_async(db, model2, "test_user", louvain_result2))
+        assert len(result2) == 1
+        assert result2[0].name == "Acme Duo"
+
+    def test_dissolved_communities_deleted(self):
+        """Communities no longer in the partition are removed."""
+        import asyncio
+
+        db = grafeo.GrafeoDB()
+        clusters = _setup_entity_graph(db)
+
+        # Create two communities
+        louvain_result = {
+            "communities": {
+                **{nid: 0 for nid in clusters["cluster1"]},
+                **{nid: 1 for nid in clusters["cluster2"]},
+            }
+        }
+        model1 = make_test_model(
+            [
+                {"name": "Acme Team", "summary": "First."},
+                {"name": "Globex Team", "summary": "Second."},
+            ]
+        )
+        asyncio.run(materialize_communities_async(db, model1, "test_user", louvain_result))
+        assert len(get_communities(db, "test_user")) == 2
+
+        # Re-run with only cluster1: cluster2 community should be dissolved
+        louvain_result2 = {"communities": {**{nid: 0 for nid in clusters["cluster1"]}}}
+        model2 = make_test_model([])  # Unchanged membership, no LLM call
+        asyncio.run(materialize_communities_async(db, model2, "test_user", louvain_result2))
+        remaining = get_communities(db, "test_user")
+        assert len(remaining) == 1
+        assert remaining[0].name == "Acme Team"
+
+    def test_get_communities_filters_by_user(self):
+        """get_communities only returns communities for the specified user."""
+        import asyncio
+
+        db = grafeo.GrafeoDB()
+        clusters = _setup_entity_graph(db)
+
+        louvain_result = {"communities": {**{nid: 0 for nid in clusters["cluster1"]}}}
+        model = make_test_model([{"name": "Acme Team", "summary": "Team A."}])
+        asyncio.run(materialize_communities_async(db, model, "test_user", louvain_result))
+
+        # Different user should see nothing
+        assert len(get_communities(db, "other_user")) == 0
+
+    def test_get_community_context_empty_entity_list(self):
+        """get_community_context returns empty for empty entity_names."""
+        db = grafeo.GrafeoDB()
+        assert get_community_context(db, [], "test_user") == []
+
+    def test_get_community_context_filters_by_user(self):
+        """get_community_context only matches communities for the specified user."""
+        import asyncio
+
+        db = grafeo.GrafeoDB()
+        clusters = _setup_entity_graph(db)
+
+        louvain_result = {"communities": {**{nid: 0 for nid in clusters["cluster1"]}}}
+        model = make_test_model([{"name": "Acme Team", "summary": "Team A."}])
+        asyncio.run(materialize_communities_async(db, model, "test_user", louvain_result))
+
+        # Different user should find nothing even with matching entity name
+        assert len(get_community_context(db, ["alice"], "other_user")) == 0

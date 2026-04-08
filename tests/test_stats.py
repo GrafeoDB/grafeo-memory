@@ -86,3 +86,39 @@ class TestStats:
         assert s.semantic_count == 1
         assert s.procedural_count == 1
         manager.close()
+
+    def test_stats_episodic_count(self):
+        """Episodic memories counted in stats."""
+        manager = _make_manager([], enable_episodes=True)
+        manager.add("raw episodic text", infer=False, memory_type="episodic")
+        s = manager.stats()
+        assert s.episodic_count == 1
+        assert s.total_memories == 1
+        assert s.episode_count >= 0
+        manager.close()
+
+    def test_stats_episode_count(self):
+        """Stats includes episode node count."""
+        manager = _make_manager(
+            [
+                {
+                    "facts": ["team standup is at 9am"],
+                    "entities": [],
+                    "relations": [],
+                },
+            ],
+            enable_episodes=True,
+        )
+        manager.add("Team standup is at 9am")
+        s = manager.stats()
+        assert s.episode_count >= 1
+        manager.close()
+
+    def test_stats_db_info_populated(self):
+        """db_info dict is filled in."""
+        manager = _make_manager([])
+        manager.add("raw text", infer=False)
+        s = manager.stats()
+        assert "memory_node_count" in s.db_info
+        assert s.db_info["memory_node_count"] == 1
+        manager.close()

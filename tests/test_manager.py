@@ -11,9 +11,12 @@ def _make_manager(outputs, dims=16, **config_kwargs):
     """Create a MemoryManager with mock model and in-memory GrafeoDB."""
     model = make_test_model(outputs)
     embedder = MockEmbedder(dims)
+    db = config_kwargs.pop("db", None)
     defaults = {"db_path": None, "user_id": "test_user", "embedding_dimensions": dims}
     defaults.update(config_kwargs)
     config = MemoryConfig(**defaults)  # type: ignore[invalid-argument-type]
+    if db:
+        return MemoryManager(model, config, embedder=embedder, db=db)
     return MemoryManager(model, config, embedder=embedder)
 
 
@@ -1795,3 +1798,224 @@ class TestSummarizeContent:
             assert add_event.text
             assert len(add_event.text) > 0
         manager.close()
+
+
+# ---------------------------------------------------------------------------
+# External DB close behavior
+# ---------------------------------------------------------------------------
+
+
+class TestExternalDBClose:
+    def test_close_with_external_db_does_not_close_db(self):
+        """When db is passed externally, close() should not close it."""
+        import grafeo
+
+        db = grafeo.GrafeoDB()
+        manager = _make_manager([], db=db)
+        manager.add("raw text", infer=False)
+        manager.close()
+        # DB should still be usable after manager.close()
+        node = db.create_node(["Test"], {"val": 1})
+        assert node is not None
+
+
+# ---------------------------------------------------------------------------
+# DELETE reconciliation decision path
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteReconciliation:
+    def test_delete_decision_expires_memory(self):
+        """A reconciliation DELETE decision soft-expires the target memory."""
+        import grafeo
+
+        db = grafeo.GrafeoDB()
+
+        # First: add a memory
+        manager1 = _make_manager(
+            [
+                {
+                    "facts": ["alice works at acme"],
+                    "entities": [],
+                    "relations": [],
+                },
+                {"decisions": [{"action": "add", "text": "alice works at acme"}]},
+            ],
+            db=db,
+        )
+        events1 = manager1.add("Alice works at Acme")
+        mid = events1[0].memory_id
+        manager1.close()
+
+        # Second: delete via reconciliation
+        manager2 = _make_manager(
+            [
+                {
+                    "facts": ["alice left acme"],
+                    "entities": [],
+                    "relations": [],
+                },
+                {
+                    "decisions": [
+                        {"action": "delete", "text": "", "target_memory_id": mid},
+                    ]
+                },
+            ],
+            reconciliation_threshold=0.0,
+            db=db,
+        )
+        events2 = manager2.add("Alice left Acme")
+        delete_events = [e for e in events2 if e.action == MemoryAction.DELETE]
+        assert len(delete_events) == 1
+        assert delete_events[0].memory_id == mid
+
+        # Memory should be expired, not visible in get_all()
+        visible = manager2.get_all()
+        old = [m for m in visible if m.memory_id == mid]
+        assert len(old) == 0
+        manager2.close()
+
+
+# ---------------------------------------------------------------------------
+# Search with time_before / time_after / diverse
+# ---------------------------------------------------------------------------
+
+
+class TestSearchTimeFiltering:
+    def test_time_after_filters(self):
+        import time
+
+        manager = _make_manager([])
+        manager.add("old fact", infer=False)
+        cutoff = int(time.time() * 1000) + 1000
+        time.sleep(0.01)
+        manager.add("new fact", infer=False)
+
+        # Search with time_after in the future should return nothing
+        results = manager.search("fact", time_after=cutoff + 999_999)
+        assert len(results) == 0
+        manager.close()
+
+    def test_time_before_filters(self):
+        manager = _make_manager([])
+        manager.add("first fact", infer=False)
+        # All memories created before a far-future timestamp should be returned
+        results = manager.search("fact", time_before=99999999999999)
+        assert len(results) >= 1
+        manager.close()
+
+    def test_diverse_search(self):
+        manager = _make_manager([])
+        manager.add("alpha beta gamma", infer=False)
+        manager.add("delta epsilon zeta", infer=False)
+        results = manager.search("alpha", diverse=True)
+        # Should return results (may be empty if embeddings diverge, but no crash)
+        assert isinstance(results, list)
+        manager.close()
+
+
+# ---------------------------------------------------------------------------
+# infer=False with episodes enabled
+# ---------------------------------------------------------------------------
+
+
+class TestInferFalseWithEpisodes:
+    def test_raw_add_creates_episode(self):
+        manager = _make_manager([], enable_episodes=True)
+        events = manager.add("raw episodic fact", infer=False)
+        assert len(events) >= 1
+        episodes = manager.get_episodes()
+        assert len(episodes) >= 1
+        manager.close()
+
+
+# ---------------------------------------------------------------------------
+# AsyncMemoryManager public methods
+# ---------------------------------------------------------------------------
+
+
+class TestAsyncManagerMethods:
+    def test_async_add_and_search(self):
+        manager = _make_async_manager([])
+
+        async def run():
+            events = await manager.add("async raw memory", infer=False)
+            assert len(events) >= 1
+            results = await manager.search("async")
+            return results
+
+        results = asyncio.run(run())
+        assert isinstance(results, list)
+
+    def test_async_delete(self):
+        manager = _make_async_manager([])
+
+        async def run():
+            events = await manager.add("to be deleted", infer=False)
+            mid = events[0].memory_id
+            await manager.delete(mid)
+            memories = await manager.get_all()
+            return [m for m in memories if m.memory_id == mid]
+
+        remaining = asyncio.run(run())
+        assert len(remaining) == 0
+
+    def test_async_delete_all(self):
+        manager = _make_async_manager([])
+
+        async def run():
+            await manager.add("mem one", infer=False)
+            await manager.add("mem two", infer=False)
+            await manager.delete_all()
+            return await manager.get_all()
+
+        memories = asyncio.run(run())
+        assert len(memories) == 0
+
+    def test_async_stats(self):
+        manager = _make_async_manager([])
+
+        async def run():
+            await manager.add("stat test", infer=False)
+            return manager.stats()
+
+        stats = asyncio.run(run())
+        assert stats.total_memories == 1
+
+    def test_async_explain(self):
+        manager = _make_async_manager(
+            [
+                {
+                    "facts": ["alice works at acme"],
+                    "entities": [],
+                    "relations": [],
+                },
+            ]
+        )
+
+        async def run():
+            return await manager.explain("alice")
+
+        result = asyncio.run(run())
+        assert hasattr(result, "steps")
+
+    def test_async_get_episodes(self):
+        manager = _make_async_manager([], enable_episodes=True)
+
+        async def run():
+            await manager.add("ep test", infer=False)
+            return manager.get_episodes()
+
+        episodes = asyncio.run(run())
+        assert isinstance(episodes, list)
+
+    def test_async_grouped_search(self):
+        manager = _make_async_manager([])
+
+        async def run():
+            await manager.add("grouped test", infer=False)
+            return await manager.search("grouped", grouped=True)
+
+        result = asyncio.run(run())
+        # grouped=True returns a dict
+        assert isinstance(result, dict)

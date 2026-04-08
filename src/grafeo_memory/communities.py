@@ -11,6 +11,7 @@ from pydantic_ai import Agent
 
 from .prompts import COMMUNITY_SUMMARY_SYSTEM, COMMUNITY_SUMMARY_USER
 from .schemas import CommunitySummaryOutput
+from .search.vector import _get_props
 from .types import (
     COMMUNITY_LABEL,
     ENTITY_LABEL,
@@ -89,7 +90,7 @@ async def materialize_communities_async(
                 # Membership unchanged, read existing summary
                 node = db.get_node(existing_nid)
                 if node is not None:
-                    props = node.properties if hasattr(node, "properties") else {}
+                    props = _get_props(node)
                     results.append(
                         CommunityInfo(
                             community_id=str(cid),
