@@ -121,7 +121,7 @@ class _MemoryCore:
             logger.debug("Text index creation deferred or already exists")
 
         # Property indexes for fast filtered lookups (database-wide; see docstring).
-        for prop in ("user_id", "created_at", "memory_type"):
+        for prop in ("user_id", "created_at", "memory_type", "graph_name"):
             with contextlib.suppress(Exception):
                 self._db.create_property_index(prop)
         with contextlib.suppress(Exception):
@@ -157,12 +157,14 @@ class _MemoryCore:
     # --- Scope filter building ---
 
     def _build_filters(self, user_id: str, extra: dict | None = None) -> dict:
-        """Build query filters from config scoping (user_id, agent_id, run_id)."""
+        """Build query filters from config scoping (user_id, agent_id, run_id, graph_name)."""
         filters: dict = {"user_id": user_id}
         if self._config.agent_id:
             filters["agent_id"] = self._config.agent_id
         if self._config.run_id:
             filters["run_id"] = self._config.run_id
+        if self._config.graph_name:
+            filters["graph_name"] = self._config.graph_name
         if extra:
             filters.update(extra)
         return filters
@@ -401,6 +403,8 @@ class _MemoryCore:
                 props["agent_id"] = self._config.agent_id
             if self._config.run_id:
                 props["run_id"] = self._config.run_id
+            if self._config.graph_name:
+                props["graph_name"] = self._config.graph_name
             if actor_id:
                 props["actor_id"] = actor_id
             if role:
@@ -609,6 +613,7 @@ class _MemoryCore:
             _entities=entities,
             query_embedding=query_embedding,
             search_depth=self._config.graph_search_depth,
+            graph_name=self._config.graph_name,
         )
 
         # Post-hoc filter graph results by memory_type if specified
@@ -1007,6 +1012,8 @@ class _MemoryCore:
             props["agent_id"] = self._config.agent_id
         if self._config.run_id:
             props["run_id"] = self._config.run_id
+        if self._config.graph_name:
+            props["graph_name"] = self._config.graph_name
         if actor_id:
             props["actor_id"] = actor_id
         if role:
@@ -1127,6 +1134,8 @@ class _MemoryCore:
                 continue
             if props.get("user_id") != user_id:
                 continue
+            if self._config.graph_name and props.get("graph_name") != self._config.graph_name:
+                continue
             node_run = props.get("run_id") or props.get("session_id")
             if node_run != run_id:
                 continue
@@ -1171,16 +1180,19 @@ class _MemoryCore:
         """
         mid = int(memory_id)
         user_filter = " AND rest.user_id = $uid" if user_id else ""
+        graph_filter = " AND rest.graph_name = $gn" if self._config.graph_name else ""
         params: dict = {"mid": mid}
         if user_id:
             params["uid"] = user_id
+        if self._config.graph_name:
+            params["gn"] = self._config.graph_name
 
         results: list[dict] = []
 
         if direction in ("forward", "both"):
             query = (
                 f"MATCH (m:{MEMORY_LABEL})-[:{LEADS_TO_EDGE}*1..{max_depth}]->(rest:{MEMORY_LABEL}) "
-                f"WHERE id(m) = $mid{user_filter} "
+                f"WHERE id(m) = $mid{user_filter}{graph_filter} "
                 f"RETURN id(rest), rest.text, rest.created_at, rest.session_id "
                 f"ORDER BY rest.created_at"
             )
@@ -1210,7 +1222,7 @@ class _MemoryCore:
         if direction in ("backward", "both"):
             query = (
                 f"MATCH (rest:{MEMORY_LABEL})-[:{LEADS_TO_EDGE}*1..{max_depth}]->(m:{MEMORY_LABEL}) "
-                f"WHERE id(m) = $mid{user_filter} "
+                f"WHERE id(m) = $mid{user_filter}{graph_filter} "
                 f"RETURN id(rest), rest.text, rest.created_at, rest.session_id "
                 f"ORDER BY rest.created_at"
             )
@@ -1357,10 +1369,14 @@ class _MemoryCore:
 
     def _find_or_create_entity(self, entity: Entity, user_id: str) -> int:
         try:
-            rows = self._db.execute(
-                f"MATCH (e:{ENTITY_LABEL}) WHERE e.name = $name AND e.user_id = $uid RETURN id(e)",
-                {"name": entity.name, "uid": user_id},
-            )
+            gn = self._config.graph_name
+            if gn:
+                query = f"MATCH (e:{ENTITY_LABEL}) WHERE e.name = $name AND e.user_id = $uid AND e.graph_name = $gn RETURN id(e)"
+                params = {"name": entity.name, "uid": user_id, "gn": gn}
+            else:
+                query = f"MATCH (e:{ENTITY_LABEL}) WHERE e.name = $name AND e.user_id = $uid RETURN id(e)"
+                params = {"name": entity.name, "uid": user_id}
+            rows = self._db.execute(query, params)
             for row in rows:
                 if isinstance(row, dict):
                     vals = list(row.values())
@@ -1369,10 +1385,10 @@ class _MemoryCore:
         except Exception:
             logger.warning("_find_or_create_entity: lookup failed for %r", entity.name, exc_info=True)
 
-        node = self._db.create_node(
-            [ENTITY_LABEL],
-            {"name": entity.name, "entity_type": entity.entity_type, "user_id": user_id},
-        )
+        entity_props: dict = {"name": entity.name, "entity_type": entity.entity_type, "user_id": user_id}
+        if self._config.graph_name:
+            entity_props["graph_name"] = self._config.graph_name
+        node = self._db.create_node([ENTITY_LABEL], entity_props)
         return node.id if hasattr(node, "id") else node
 
     def _get_existing_relations(self, entity_ids: dict[str, int]) -> list[dict]:
@@ -1589,6 +1605,7 @@ class _MemoryCore:
 
     def _stats_impl(self) -> MemoryStats:
         """Collect database introspection statistics."""
+        gn = self._config.graph_name
         try:
             memory_nodes = self._db.get_nodes_by_label(MEMORY_LABEL)
         except Exception:
@@ -1600,6 +1617,8 @@ class _MemoryCore:
         for item in memory_nodes:
             # get_nodes_by_label returns list of (id, props_dict) tuples
             props = item[1] if isinstance(item, tuple) else _get_props(item)
+            if gn and props.get("graph_name") != gn:
+                continue
             mtype = props.get("memory_type", "semantic")
             if mtype == "procedural":
                 procedural += 1
@@ -1610,15 +1629,28 @@ class _MemoryCore:
 
         try:
             entity_nodes = self._db.get_nodes_by_label(ENTITY_LABEL)
-            entity_count = len(entity_nodes)
+            if gn:
+                entity_count = sum(
+                    1 for item in entity_nodes
+                    if (item[1] if isinstance(item, tuple) else _get_props(item)).get("graph_name") == gn
+                )
+            else:
+                entity_count = len(entity_nodes)
         except Exception:
             entity_count = 0
 
         relation_count = 0
         try:
-            rows = self._db.execute(
-                f"MATCH (:{ENTITY_LABEL})-[r:{RELATION_EDGE}]->(:{ENTITY_LABEL}) RETURN count(r)", {}
-            )
+            if gn:
+                rows = self._db.execute(
+                    f"MATCH (s:{ENTITY_LABEL})-[r:{RELATION_EDGE}]->(t:{ENTITY_LABEL}) "
+                    f"WHERE s.graph_name = $gn RETURN count(r)",
+                    {"gn": gn},
+                )
+            else:
+                rows = self._db.execute(
+                    f"MATCH (:{ENTITY_LABEL})-[r:{RELATION_EDGE}]->(:{ENTITY_LABEL}) RETURN count(r)", {}
+                )
             for row in rows:
                 vals = list(row.values()) if isinstance(row, dict) else [row]
                 relation_count = int(vals[0]) if vals else 0

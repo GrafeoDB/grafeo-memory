@@ -44,6 +44,7 @@ def graph_search(
     _entities: list | None = None,
     query_embedding: list[float] | None = None,
     search_depth: int = 1,
+    graph_name: str | None = None,
 ) -> list[SearchResult]:
     """Search by extracting entities from the query and finding linked memories.
 
@@ -78,13 +79,17 @@ def graph_search(
     results: list[SearchResult] = []
     seen_memory_ids: set[str] = set()
 
+    gn_filter = " AND e.graph_name = $gn" if graph_name else ""
+    gn_params: dict = {"gn": graph_name} if graph_name else {}
+
     for entity in entities:
         # Find Entity nodes by name, scoped to the Entity label and user.
         entity_nids: list[int] = []
         try:
+            params = {"name": entity.name, "uid": user_id, **gn_params}
             rows = db.execute(
-                f"MATCH (e:{ENTITY_LABEL}) WHERE e.name = $name AND e.user_id = $uid RETURN id(e)",
-                {"name": entity.name, "uid": user_id},
+                f"MATCH (e:{ENTITY_LABEL}) WHERE e.name = $name AND e.user_id = $uid{gn_filter} RETURN id(e)",
+                params,
             )
             entity_nids = [int(next(iter(r.values()))) for r in rows if isinstance(r, dict) and r]
         except Exception:
@@ -93,22 +98,24 @@ def graph_search(
         # Case-insensitive fallback
         if not entity_nids:
             with contextlib.suppress(Exception):
+                params = {"name": entity.name.lower(), "uid": user_id, **gn_params}
                 rows = db.execute(
-                    f"MATCH (e:{ENTITY_LABEL}) WHERE toLower(e.name) = $name AND e.user_id = $uid RETURN id(e)",
-                    {"name": entity.name.lower(), "uid": user_id},
+                    f"MATCH (e:{ENTITY_LABEL}) WHERE toLower(e.name) = $name AND e.user_id = $uid{gn_filter} RETURN id(e)",
+                    params,
                 )
                 entity_nids = [int(next(iter(r.values()))) for r in rows if isinstance(r, dict) and r]
 
+        mem_gn_filter = " AND m.graph_name = $gn" if graph_name else ""
         for entity_nid in entity_nids:
             # Traverse HAS_ENTITY edges back to Memory nodes
             try:
                 query_str = (
                     f"MATCH (m:{MEMORY_LABEL})"
                     f"-[:{HAS_ENTITY_EDGE}]->(e:{ENTITY_LABEL}) "
-                    f"WHERE id(e) = $eid AND m.user_id = $uid "
+                    f"WHERE id(e) = $eid AND m.user_id = $uid{mem_gn_filter} "
                     f"RETURN id(m), m.text"
                 )
-                result = db.execute(query_str, {"eid": entity_nid, "uid": user_id})
+                result = db.execute(query_str, {"eid": entity_nid, "uid": user_id, **gn_params})
                 for row in result:
                     if not isinstance(row, dict):
                         continue
@@ -158,13 +165,14 @@ def graph_search(
     if search_depth >= 2 and entities:
         entity_names = [e.name for e in entities]
         try:
+            two_hop_gn = " AND e1.graph_name = $gn AND m.graph_name = $gn" if graph_name else ""
             two_hop_query = (
                 f"MATCH (e1:{ENTITY_LABEL})-[:{RELATION_EDGE}]->(e2:{ENTITY_LABEL})"
                 f"<-[:{HAS_ENTITY_EDGE}]-(m:{MEMORY_LABEL}) "
-                f"WHERE e1.name IN $names AND e1.user_id = $uid AND m.user_id = $uid "
+                f"WHERE e1.name IN $names AND e1.user_id = $uid AND m.user_id = $uid{two_hop_gn} "
                 f"RETURN DISTINCT id(m), m.text"
             )
-            two_hop_result = db.execute(two_hop_query, {"names": entity_names, "uid": user_id})
+            two_hop_result = db.execute(two_hop_query, {"names": entity_names, "uid": user_id, **gn_params})
             for row in two_hop_result:
                 if not isinstance(row, dict):
                     continue
