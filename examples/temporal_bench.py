@@ -17,9 +17,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from mistralai import Mistral
+from mistralai import Mistral  # noqa: E402
 
-from grafeo_memory import MemoryConfig, MemoryManager, MistralEmbedder
+from grafeo_memory import MemoryConfig, MemoryManager, MistralEmbedder  # noqa: E402
 
 
 def main():
@@ -63,7 +63,7 @@ def main():
         from datetime import UTC, datetime
 
         mid_2023 = int(datetime(2023, 7, 1, tzinfo=UTC).timestamp() * 1000)
-        print(f"Search: 'Where does Markus work?' (point_in_time=2023-07-01)")
+        print("Search: 'Where does Markus work?' (point_in_time=2023-07-01)")
         results = mem.search("Where does Markus work?", point_in_time=mid_2023)
         for r in results[:3]:
             va = f"  valid_at={r.valid_at}" if r.valid_at else ""
@@ -94,7 +94,7 @@ def main():
 
         # Session replay
         if episodes:
-            print(f"Episode chain (forward from first):")
+            print("Episode chain (forward from first):")
             chain = mem.episode_chain(episodes[0].episode_id, direction="forward")
             for ep in chain:
                 print(f"  -> [{ep.episode_id}] {ep.content[:50]}...")
