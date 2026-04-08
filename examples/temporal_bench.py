@@ -1,9 +1,8 @@
 """Quick benchmark for temporal knowledge graph features.
 
-Exercises all three new capabilities:
+Exercises:
   1. Bi-temporal model (valid_at/invalid_at, point-in-time queries)
   2. Episode provenance (Episode nodes, PRODUCED edges, session replay)
-  3. Community summaries (Louvain clusters, LLM-generated summaries)
 
 Requires:
     MISTRAL_API_KEY in .env

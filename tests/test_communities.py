@@ -109,7 +109,7 @@ class TestCommunityMaterialization:
             ]
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             materialize_communities_async(db, model, "test_user", louvain_result)
         )
 
@@ -129,7 +129,7 @@ class TestCommunityMaterialization:
         louvain_result = {"communities": {e1_id: 0}}
         model = make_test_model([])
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             materialize_communities_async(db, model, "test_user", louvain_result)
         )
         assert len(result) == 0
@@ -173,7 +173,7 @@ class TestGetCommunities:
             ]
         )
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             materialize_communities_async(db, model, "test_user", louvain_result)
         )
 
@@ -214,7 +214,7 @@ class TestCommunityContext:
             ]
         )
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             materialize_communities_async(db, model, "test_user", louvain_result)
         )
 
@@ -242,7 +242,7 @@ class TestCommunityContext:
             ]
         )
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             materialize_communities_async(db, model, "test_user", louvain_result)
         )
 
@@ -277,7 +277,7 @@ class TestCommunityStats:
             ]
         )
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             materialize_communities_async(db, model, "test_user", louvain_result)
         )
 

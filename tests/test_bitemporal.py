@@ -13,10 +13,11 @@ from grafeo_memory.extraction.temporal import _parse_date_to_epoch_ms
 def _make_manager(outputs, dims=16, **config_kwargs):
     model = make_test_model(outputs)
     embedder = MockEmbedder(dims)
+    db = config_kwargs.pop("db", None)
     defaults = {"db_path": None, "user_id": "test_user", "embedding_dimensions": dims}
     defaults.update(config_kwargs)
     config = MemoryConfig(**defaults)  # type: ignore[invalid-argument-type]
-    return MemoryManager(model, config, embedder=embedder)
+    return MemoryManager(model, config, embedder=embedder, db=db) if db else MemoryManager(model, config, embedder=embedder)
 
 
 def _extraction_output(facts, entities=None, relations=None):
@@ -119,31 +120,54 @@ class TestBiTemporalAdd:
 
     def test_update_sets_invalid_at(self):
         """UPDATE via reconciliation sets invalid_at on the old memory when bitemporal."""
+        jan_15 = int(datetime(2024, 1, 15, tzinfo=UTC).timestamp() * 1000)
         march_1 = int(datetime(2024, 3, 1, tzinfo=UTC).timestamp() * 1000)
 
-        manager = _make_manager(
+        # We need a two-phase setup: first add creates the memory, then we
+        # build a second manager whose reconciliation mock references the real ID.
+        import grafeo
+
+        db = grafeo.GrafeoDB()
+
+        manager1 = _make_manager(
             [
-                # First add: 3 LLM calls (extraction, temporal, reconciliation)
                 _extraction_output(["alice works at acme"]),
                 _temporal_annotation_output([{"fact_index": 0, "valid_at": "2024-01-15", "invalid_at": None}]),
                 {"decisions": [{"action": "add", "text": "alice works at acme"}]},
-                # Second add: 3 LLM calls (extraction, temporal, reconciliation)
-                _extraction_output(["alice now works at globex"]),
-                _temporal_annotation_output([{"fact_index": 0, "valid_at": "2024-03-01", "invalid_at": None}]),
-                {"decisions": [{"action": "update", "text": "alice now works at globex", "target_memory_id": None}]},
             ],
             enable_bitemporal=True,
+            db=db,
         )
-
-        events1 = manager.add("Alice works at Acme")
+        events1 = manager1.add("Alice works at Acme")
         assert len(events1) >= 1
+        old_memory_id = events1[0].memory_id
+        manager1.close()
 
-        events2 = manager.add("Alice now works at Globex")
+        # Second add targets the real memory ID so UPDATE path executes.
+        # reconciliation_threshold=0.0 ensures search_similar finds the first memory,
+        # so the reconciliation LLM mock is used instead of the fast-path ADD.
+        manager2 = _make_manager(
+            [
+                _extraction_output(["alice now works at globex"]),
+                _temporal_annotation_output([{"fact_index": 0, "valid_at": "2024-03-01", "invalid_at": None}]),
+                {"decisions": [{"action": "update", "text": "alice now works at globex", "target_memory_id": old_memory_id}]},
+            ],
+            enable_bitemporal=True,
+            reconciliation_threshold=0.0,
+            db=db,
+        )
+        events2 = manager2.add("Alice now works at Globex")
         assert len(events2) >= 1
-        # The UPDATE fell back to ADD because target_memory_id was None in the mock,
-        # but the new memory should still have valid_at set
+        assert events2[0].action.value == "update"
         assert events2[0].valid_at == march_1
-        manager.close()
+
+        # Verify invalid_at was set on the old (expired) memory
+        memories = manager2.get_all(include_expired=True)
+        old = [m for m in memories if m.memory_id == old_memory_id]
+        assert len(old) == 1
+        assert old[0].invalid_at == march_1
+        assert old[0].valid_at == jan_15
+        manager2.close()
 
 
 # ---------------------------------------------------------------------------

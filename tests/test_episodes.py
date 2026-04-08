@@ -318,15 +318,15 @@ class TestSearchUnaffected:
         manager.add("Fact two")
 
         # Check there are no LEADS_TO edges in the graph
+        count = 0
         try:
             rows = db.execute("MATCH ()-[r:LEADS_TO]->() RETURN count(r)", {})
-            count = 0
             for row in rows:
                 vals = list(row.values()) if isinstance(row, dict) else [row]
                 count = int(vals[0]) if vals else 0
-            assert count == 0
-        except Exception:
-            pass  # If query fails, that's fine too (no LEADS_TO edges exist)
+        except (RuntimeError, KeyError, TypeError):
+            pass  # Query not supported or returned unexpected shape: no LEADS_TO edges
+        assert count == 0
         manager.close()
 
 
