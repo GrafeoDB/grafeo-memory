@@ -5,7 +5,7 @@ All notable changes to grafeo-memory are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.2] - Unreleased
+## [0.2.2] - 2026-04-08
 
 Bi-temporal validity tracking, episode-based provenance, and community summaries for richer temporal knowledge graphs.
 
@@ -30,6 +30,9 @@ Bi-temporal validity tracking, episode-based provenance, and community summaries
 - New exports: `EPISODE_LABEL`, `PRODUCED_EDGE`, `MENTIONS_EDGE`, `NEXT_EPISODE_EDGE`, `COMMUNITY_LABEL`, `HAS_MEMBER_EDGE`, `EpisodeResult`, `CommunityInfo`
 - New modules: `extraction/temporal.py`, `communities.py`
 - New prompts: `TEMPORAL_ANNOTATION_SYSTEM/USER`, `COMMUNITY_SUMMARY_SYSTEM/USER`
+- **`graph_name` scoping**: optional `graph_name` on `MemoryConfig` isolates memories and entities per subgraph when multiple callers share a database via `db=`. Stamped on all Memory and Entity creates, filtered on all read paths (`_build_filters`, `graph_search`, `temporal_chain`, session linking, `stats`). No behavior change when unset ([#23](https://github.com/GrafeoDB/grafeo-memory/issues/23), [#24](https://github.com/GrafeoDB/grafeo-memory/pull/24), thanks [@Michaelzag](https://github.com/Michaelzag))
+- `graph_name` added to property index list for fast scoped lookups
+- 15 new tests covering `graph_name` write stamping, read isolation, entity separation, stats scoping, temporal chain boundaries, and backward compatibility
 
 ### Changed
 
