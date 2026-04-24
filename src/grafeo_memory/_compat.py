@@ -6,6 +6,7 @@ import asyncio
 import atexit
 import contextlib
 import sys
+import warnings
 from collections.abc import Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -14,14 +15,20 @@ from typing import Any
 # Python 3.13+ incremental GC can trigger httpx transport __del__ after the
 # event loop is closed, raising RuntimeError on Windows. This monkey-patch
 # silences the spurious error in transport teardown.
+#
+# CPython's _ProactorBasePipeTransport.__del__ has signature
+# `def __del__(self, _warn=warnings.warn)` — `_warn` is bound at module-load
+# time so __del__ keeps a working warner even after interpreter teardown.
+# Our wrapper must preserve that contract: defaulting `_warn=None` causes
+# `TypeError: 'NoneType' object is not callable` deep inside __del__.
 if sys.platform == "win32":
     try:
         from asyncio.proactor_events import _ProactorBasePipeTransport
 
         _original_del = _ProactorBasePipeTransport.__del__
 
-        def _safe_del(self, _warn: object = None) -> None:
-            with contextlib.suppress(RuntimeError):
+        def _safe_del(self, _warn=warnings.warn) -> None:
+            with contextlib.suppress(Exception):
                 _original_del(self, _warn)  # ty: ignore[too-many-positional-arguments]
 
         _ProactorBasePipeTransport.__del__ = _safe_del  # ty: ignore[invalid-assignment]
