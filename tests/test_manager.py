@@ -2019,3 +2019,51 @@ class TestAsyncManagerMethods:
         result = asyncio.run(run())
         # grouped=True returns a dict
         assert isinstance(result, dict)
+
+
+class TestAsyncManagerProvenanceAndCommunities:
+    """Async paths with no other coverage: provenance, episode chains, importance, communities."""
+
+    def test_async_provenance_episode_chain_and_importance(self):
+        manager = _make_async_manager([], enable_episodes=True, run_id="run-1")
+
+        async def run():
+            first = (await manager.add("first", infer=False))[0].memory_id
+            second = (await manager.add("second", infer=False))[0].memory_id
+            (episode,) = manager.get_provenance(first)
+            chain = manager.episode_chain(episode.episode_id, direction="forward")
+            assert [e.content for e in chain] == ["second"]
+            assert manager.get_provenance(second)[0].content == "second"
+            assert manager.set_importance(first, 0.25) is True
+            assert manager.set_importance("999999", 0.25) is False
+            manager.close()
+
+        asyncio.run(run())
+
+    def test_async_community_summaries_end_to_end(self):
+        alice = {"name": "alice", "entity_type": "person"}
+        acme = {"name": "acme_corp", "entity_type": "organization"}
+        manager = _make_async_manager(
+            [
+                {
+                    "facts": ["alice works at acme corp"],
+                    "entities": [alice, acme],
+                    "relations": [{"source": "alice", "target": "acme_corp", "relation_type": "works_at"}],
+                },
+                {"name": "Acme staff", "summary": "Alice works at Acme Corp."},  # community summary
+                {"entities": [], "relations": []},  # query entity extraction
+            ],
+            enable_graph_algorithms=True,
+            enable_community_summaries=True,
+        )
+
+        async def run():
+            await manager.add("Alice works at Acme Corp")
+            await manager.search("who works at acme?")
+            (community,) = manager.get_communities()
+            assert community.name == "Acme staff"
+            assert sorted(community.member_entities) == ["acme_corp", "alice"]
+            assert manager.stats().community_count == 1
+            manager.close()
+
+        asyncio.run(run())

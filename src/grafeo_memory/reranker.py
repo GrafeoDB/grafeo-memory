@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from pydantic import BaseModel
@@ -102,21 +103,8 @@ class LLMReranker:
 
         scored.sort(key=lambda x: x[0], reverse=True)
 
-        reranked = []
-        for score, r in scored:
-            reranked.append(
-                SearchResult(
-                    memory_id=r.memory_id,
-                    text=r.text,
-                    score=score,
-                    user_id=r.user_id,
-                    metadata=r.metadata,
-                    relations=r.relations,
-                    actor_id=r.actor_id,
-                    role=r.role,
-                    source=r.source,
-                )
-            )
+        # replace() keeps every other field (memory_type, created_at, session_id, ...).
+        reranked = [replace(r, score=score) for score, r in scored]
 
         if top_k is not None:
             reranked = reranked[:top_k]

@@ -1,7 +1,7 @@
 """Integration tests for the 7 new grafeo-memory features.
 
 Covers: property indexes, learned_at, session-grouped search, batch creation,
-temporal chain traversal, and CDC history.
+temporal chain traversal, and history without engine CDC.
 """
 
 import grafeo
@@ -321,45 +321,54 @@ class TestTemporalChain:
 
 
 # =============================================================================
-# 7. CDC History
+# 7. History without engine CDC
 # =============================================================================
 
 
-class TestCDCHistory:
-    def test_record_history_noop_with_cdc(self):
-        """record_history is a no-op when native CDC is available."""
-        db = grafeo.GrafeoDB()
-        if not hasattr(db, "node_history"):
-            return
-        node = db.create_node(["Memory"], {"text": "test"})
-        node_id = node.id if hasattr(node, "id") else node
-        result = record_history(db, node_id, HistoryEntry(event="ADD", new_text="test"))
-        assert result is None
+class TestHistoryIndependentOfCDC:
+    """History used to be read from engine CDC, which is off by default since grafeo 0.5.32.
 
-    def test_get_history_returns_add_event(self):
-        """get_history returns ADD event for newly created node."""
-        db = grafeo.GrafeoDB()
-        if not hasattr(db, "node_history"):
-            return
-        node = db.create_node(["Memory"], {"text": "hello world"})
-        node_id = node.id if hasattr(node, "id") else node
-        entries = get_history(db, node_id)
-        assert len(entries) >= 1
-        assert entries[0].event == "ADD"
+    These replace the old TestCDCHistory tests, which expected get_history() to
+    report raw engine writes and so encoded the CDC-based design.
+    """
 
-    def test_get_history_tracks_text_update(self):
-        """get_history returns UPDATE when text property changes."""
+    def test_manager_records_history_with_cdc_disabled(self):
         db = grafeo.GrafeoDB()
-        if not hasattr(db, "node_history"):
-            return
-        node = db.create_node(["Memory"], {"text": "version 1"})
-        node_id = node.id if hasattr(node, "id") else node
-        db.set_node_property(node_id, "text", "version 2")
+        assert db.cdc_enabled is False
+        config = MemoryConfig(user_id="test_user", embedding_dimensions=16)
+        manager = MemoryManager(make_test_model([]), config, embedder=MockEmbedder(16), db=db)
+        events = manager.add("hello world", infer=False)
+        entries = manager.history(events[0].memory_id)
+        assert [e.event for e in entries] == ["ADD"]
+        assert entries[0].new_text == "hello world"
 
-        entries = get_history(db, node_id)
-        events = [e.event for e in entries]
-        assert "ADD" in events
-        assert "UPDATE" in events
+    def test_manager_history_on_cdc_enabled_db_has_no_duplicates(self):
+        """A user-supplied database with CDC on gives the same history, once."""
+        db = grafeo.GrafeoDB()
+        db.enable_cdc()
+        config = MemoryConfig(user_id="test_user", embedding_dimensions=16)
+        manager = MemoryManager(make_test_model([]), config, embedder=MockEmbedder(16), db=db)
+        events = manager.add("version 1", infer=False)
+        mid = events[0].memory_id
+        manager.update(mid, "version 2")
+
+        entries = manager.history(mid)
+        assert [e.event for e in entries] == ["ADD", "UPDATE"]
+        assert entries[1].old_text == "version 1"
+        assert entries[1].new_text == "version 2"
+        # The manager leaves the CDC setting of a database it does not own alone.
+        assert db.cdc_enabled is True
+
+    def test_timestamps_are_epoch_milliseconds(self):
+        """CDC timestamps are hybrid logical clock values; history must use epoch ms."""
+        import time
+
+        before = int(time.time() * 1000)
+        manager = _make_manager([])
+        events = manager.add("timed", infer=False)
+        after = int(time.time() * 1000)
+        (entry,) = manager.history(events[0].memory_id)
+        assert before <= entry.timestamp <= after
 
     def test_get_history_empty_for_nonexistent(self):
         """get_history returns empty list for nonexistent node."""
@@ -367,17 +376,12 @@ class TestCDCHistory:
         entries = get_history(db, 99999)
         assert entries == []
 
-    def test_cdc_update_captures_old_and_new_text(self):
-        """CDC UPDATE events capture old_text and new_text."""
+    def test_record_and_get_round_trip(self):
         db = grafeo.GrafeoDB()
-        if not hasattr(db, "node_history"):
-            return
         node = db.create_node(["Memory"], {"text": "original"})
-        node_id = node.id if hasattr(node, "id") else node
-        db.set_node_property(node_id, "text", "updated")
-
-        entries = get_history(db, node_id)
-        updates = [e for e in entries if e.event == "UPDATE"]
-        if updates:
-            assert updates[0].old_text == "original"
-            assert updates[0].new_text == "updated"
+        record_history(db, node.id, HistoryEntry(event="ADD", new_text="original", timestamp=1))
+        record_history(db, node.id, HistoryEntry(event="UPDATE", old_text="original", new_text="updated", timestamp=2))
+        updates = [e for e in get_history(db, node.id) if e.event == "UPDATE"]
+        assert len(updates) == 1
+        assert updates[0].old_text == "original"
+        assert updates[0].new_text == "updated"

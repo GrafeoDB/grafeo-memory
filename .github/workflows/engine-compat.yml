@@ -1,0 +1,45 @@
+name: Engine compatibility
+
+# Runs the suite against the newest grafeo releases on PyPI, pre-releases
+# included, so an engine change that breaks grafeo-memory shows up before
+# users hit it. tests/test_grafeo_contract.py names the engine behavior that
+# changed.
+#
+# - within-pin: the newest grafeo that the requirement in pyproject.toml accepts
+# - newest:     the newest grafeo on PyPI, ignoring that requirement (early
+#               warning for the next minor release)
+#
+# Only grafeo moves: every other package stays at its locked version.
+
+on:
+  schedule:
+    - cron: "0 5 * * 1" # Mondays, 05:00 UTC
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: grafeo ${{ matrix.grafeo }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        grafeo: [within-pin, newest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --all-extras --no-sources
+      - name: Newest grafeo the requirement accepts
+        if: matrix.grafeo == 'within-pin'
+        run: uv pip install --no-sources -r pyproject.toml --upgrade-package grafeo --prerelease allow
+      - name: Newest grafeo on PyPI
+        if: matrix.grafeo == 'newest'
+        run: uv pip install --upgrade --prerelease allow grafeo
+      - name: Engine under test
+        run: uv run --no-sync python -c "import grafeo; print(grafeo.__version__, grafeo.build_info())"
+      - name: Engine contract
+        run: uv run --no-sync pytest tests/test_grafeo_contract.py -v --no-cov
+      - name: Full suite
+        run: uv run --no-sync pytest -v

@@ -95,3 +95,38 @@ class TestMultiSessionSequential:
         with MemoryManager(model, config, embedder=embedder) as mem:
             memories = mem.get_all()
             assert len(memories) == 3
+
+
+class TestSingleFileDatabase:
+    """A ``.grafeo`` path is a single-file database, the default format from grafeo 0.6."""
+
+    def test_round_trip_with_graph_search_and_indexes(self, tmp_path):
+        path = tmp_path / "memory.grafeo"
+        alice = {"name": "alice", "entity_type": "person"}
+
+        manager = make_manager(
+            [{"facts": ["alice likes hiking"], "entities": [alice], "relations": []}], db_path=str(path)
+        )
+        mid = manager.add("Alice likes hiking")[0].memory_id
+        manager.add("unrelated note", infer=False)
+        manager.close()
+        assert path.is_file()
+
+        manager = make_manager([{"entities": [alice], "relations": []}], db_path=str(path))
+        try:
+            results = manager.search("alice likes hiking")
+            assert results[0].memory_id == mid
+            assert results[0].source == "both", "vector and graph search both work after reopen"
+            assert manager.stats().entity_count == 1
+            for prop in ("user_id", "memory_id"):
+                assert manager._db.has_property_index(prop)
+        finally:
+            manager.close()
+
+    def test_close_releases_the_file(self, tmp_path):
+        path = str(tmp_path / "memory.grafeo")
+        for i in range(3):
+            with make_manager([], db_path=path) as manager:
+                manager.add(f"fact {i}", infer=False)
+        with make_manager([], db_path=path) as manager:
+            assert sorted(m.text for m in manager.get_all()) == ["fact 0", "fact 1", "fact 2"]

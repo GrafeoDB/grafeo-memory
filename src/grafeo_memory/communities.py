@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from pydantic_ai import Agent
 
+from ._graph import detach_delete_node
 from .prompts import COMMUNITY_SUMMARY_SYSTEM, COMMUNITY_SUMMARY_USER
 from .schemas import CommunitySummaryOutput
 from .search.vector import _get_props
@@ -191,11 +192,13 @@ async def materialize_communities_async(
             )
         )
 
-    # Delete dissolved communities (existing but no longer active)
+    # Delete dissolved communities (existing but no longer active), with their HAS_MEMBER edges
     for cid, (existing_nid, _) in existing_communities.items():
         if cid not in active_cids:
-            with contextlib.suppress(Exception):
-                db.delete_node(existing_nid)
+            try:
+                detach_delete_node(db, existing_nid)
+            except Exception:
+                logger.warning("Failed to delete dissolved community %s (node %s)", cid, existing_nid, exc_info=True)
 
     return results
 

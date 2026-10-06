@@ -5,6 +5,38 @@ All notable changes to grafeo-memory are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - Unreleased
+
+Works with grafeo 0.5.44: deletes work again, memory history is stored durably, and an engine contract suite runs weekly against the newest grafeo.
+
+### Fixed
+
+- **Deletes failed on grafeo 0.5.44**: the engine now refuses to delete a node that still has edges, and memories almost always have some (`HAS_ENTITY`, `LEADS_TO`, `SUPERSEDES`, `DERIVED_FROM`, `PRODUCED`). `delete()`, `delete_all()` and `summarize()` raised `GrafeoError`, and dissolved communities were silently kept. Nodes are now removed with `DETACH DELETE` (new helper `_graph.detach_delete_node()`); entities, relations and episodes stay
+- **`history()` was always empty on grafeo 0.5.32 and later**: history was read from engine change data capture, which became opt-in in 0.5.32 and is kept in memory only (lost on close, pruned by retention, with hybrid logical clock timestamps instead of epoch milliseconds), while `record_history()` wrote nothing whenever the engine had CDC. grafeo-memory now stores every change as a `:History` node in the same database (see Changed). History survives closing and reopening the database and a hard delete of the memory
+- **Search results lost fields**: the vector/graph merge, `enable_topology_boost`, `enable_importance`, the cross-session boost and `LLMReranker` rebuilt `SearchResult` by hand and dropped `created_at`, `session_id`, `valid_at`, `invalid_at`, `learned_at` (and the reranker also `memory_type`). Results found by both vector and graph search then failed `time_after`/`time_before`, ignored `point_in_time`, sorted wrongly for temporal queries, and `grouped=True` put them under `"default"`
+- **Embeddings that were not float lists were never found**: the engine indexes a property as a vector only when every element is a float, so an embedder returning ints stored memories that vector search skipped. Embeddings are now converted to floats before they are stored or searched
+- **Reconciliation acted on any node id the LLM returned**: an UPDATE or DELETE whose `target_memory_id` was not one of the candidates shown to the LLM (hallucinated, injected, another user's memory or a foreign node in a shared database) expired that node. Such decisions now lose their target: UPDATE becomes ADD and DELETE is skipped, with a warning
+- **`delete()`, `update()` and `set_importance()` accepted any node id**: in a shared database they could delete or change foreign nodes, or memories of another `graph_name`. They now act only on `:Memory` nodes in the manager's scope
+- **`delete_all()` left expired memories behind**: memories superseded by reconciliation (and their text) stayed in the database. They are now deleted too
+- **Session and episode chains forked within one millisecond**: `LEADS_TO` and `NEXT_EPISODE` picked the previous node by `created_at` alone, so quick successive adds all linked to the same node. Ties are now broken by node id
+
+### Changed
+
+- **Dependency**: `grafeo>=0.5.44,<0.6` (was `>=0.5.27`). grafeo 0.5.44 changed the direct-write API (writes to missing nodes and deletes of connected nodes raise). The upper bound keeps this release off grafeo 0.6 and its one-way file migration; grafeo-memory 0.3.0 moves to `grafeo~=0.6.0`, see the [versioning policy](https://grafeo.dev/versioning/)
+- **History storage**: `:History` nodes carry `memory_id`, `event`, `timestamp` (epoch ms), the texts, `actor_id`, `role`, `user_id` and `graph_name`, and have no edges, so they do not change graph algorithm scores. `record_history()` always writes and returns the node id; new `record_history_batch()` (used by `add_batch(infer=False)`) and `adopt_legacy_history()`. `get_history()` gains a `graph_name` filter, still reads the `HAS_HISTORY` entries of grafeo-memory 0.1.x, and raises database errors instead of returning an empty list. Engine CDC is not used, and the CDC setting of a database passed in with `db=` is left alone
+- `history()` is scoped to the manager's `graph_name`
+- `delete()` records a DELETE history entry; `summarize()` records it through the same path
+- `update()` raises `ValueError` when `memory_id` is not a memory of the manager (it used to return an UPDATE event and change nothing). The MCP `memory_update` tool returns the error, the CLI exits with status 1
+- `memory_id` joins the property indexes created at startup
+- README, docstrings and `.env.example` use single-file `.grafeo` database paths; README has new Persistence (including upgrading to grafeo 0.6) and Memory History sections
+- Development dependencies moved from the deprecated `[tool.uv] dev-dependencies` to `[dependency-groups]`
+
+### Added
+
+- **Engine contract tests** (`tests/test_grafeo_contract.py`, 37 tests): every grafeo behavior grafeo-memory relies on (direct API calls and their errors, query shapes and result format, `DETACH DELETE`, vector, text, hybrid and MMR search, PageRank, betweenness and Louvain output, single-file and directory persistence, CDC defaults). A failure names the behavior that changed and the code that depends on it
+- **Weekly engine compatibility workflow** (`.github/workflows/engine-compat.yml`, also manual): runs the contract tests and the full suite on Linux and Windows against the newest grafeo the requirement accepts and the newest grafeo on PyPI, pre-releases included
+- Tests for delete cascades through every edge type, history on every write path and across close and reopen (single-file and WAL-directory databases), shared databases with and without CDC, the async manager, the MCP tools and server lifespan against a real manager, and the CLI against a database file; regression tests for each fix above (540 to 641 tests)
+
 ## [0.2.2] - 2026-04-08
 
 Bi-temporal validity tracking, episode-based provenance, and community summaries for richer temporal knowledge graphs.
@@ -275,7 +307,8 @@ Initial release.
 - **Windows async compatibility**: persistent `asyncio.Runner` and `ProactorEventLoop` safety net for Python 3.13+
 - 230 tests, 83% coverage
 
-[Unreleased]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.2.1...HEAD
+[0.2.3]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.4...v0.1.5

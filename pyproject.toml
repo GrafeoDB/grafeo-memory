@@ -1,6 +1,6 @@
 [project]
 name = "grafeo-memory"
-version = "0.2.2"
+version = "0.2.3"
 description = "AI memory layer powered by GrafeoDB's hybrid graph and vector database"
 readme = "README.md"
 license = "Apache-2.0"
@@ -14,7 +14,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "grafeo>=0.5.27",
+    "grafeo>=0.5.44,<0.6",
     "pydantic-ai-slim",
 ]
 
@@ -89,9 +89,9 @@ exclude_lines = [
     "raise NotImplementedError",
 ]
 
-# ── UV ────────────────────────────────────────────────────────────────
-[tool.uv]
-dev-dependencies = [
+# ── Dependency groups (PEP 735) ───────────────────────────────────────
+[dependency-groups]
+dev = [
     "pytest>=9",
     "pytest-cov>=7",
     "ruff>=0.15",

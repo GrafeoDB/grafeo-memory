@@ -7,7 +7,7 @@
 
 AI memory layer powered by [GrafeoDB](https://github.com/GrafeoDB/grafeo), an embedded graph database with native vector search.
 
-No servers, no Docker, no Neo4j, no Qdrant. One `.db` file + one LLM.
+No servers, no Docker, no Neo4j, no Qdrant. One `.grafeo` file + one LLM.
 
 ```
 Typical memory stack: Containers with Neo4j + Qdrant, Embedding API + LLM
@@ -40,7 +40,7 @@ from openai import OpenAI
 from grafeo_memory import MemoryManager, MemoryConfig, OpenAIEmbedder
 
 embedder = OpenAIEmbedder(OpenAI())
-config = MemoryConfig(db_path="./memory.db", user_id="alice")
+config = MemoryConfig(db_path="./memory.grafeo", user_id="alice")
 
 with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
     # Add memories from conversation
@@ -65,7 +65,7 @@ from mistralai import Mistral
 from grafeo_memory import MemoryManager, MemoryConfig, MistralEmbedder
 
 embedder = MistralEmbedder(Mistral())
-config = MemoryConfig(db_path="./memory.db", user_id="alice")
+config = MemoryConfig(db_path="./memory.grafeo", user_id="alice")
 
 with MemoryManager("mistral:mistral-small-latest", config, embedder=embedder) as memory:
     events = memory.add("I just started a new job at Acme Corp as a data scientist")
@@ -94,14 +94,14 @@ grafeo-memory implements the **reconciliation loop**, the intelligence layer tha
          │      GrafeoDB      │
          │  Graph + Vector    │
          │  + Text (optional) │
-         │  single .db file   │
+         │ single .grafeo file│
          └────────────────────┘
 ```
 
 ## Multi-User Isolation
 
 ```python
-config = MemoryConfig(db_path="./chat_memory.db")
+config = MemoryConfig(db_path="./chat_memory.grafeo")
 
 with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
     # Each user's memories are isolated
@@ -113,6 +113,81 @@ with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
 
     carol_results = memory.search("vacation preferences", user_id="carol")
     # -> beach vacations
+```
+
+## Persistence
+
+```python
+config = MemoryConfig(db_path="./memory.grafeo")  # single-file database
+config = MemoryConfig()                           # in memory, gone when the process ends
+```
+
+- A `db_path` ending in `.grafeo` is a single-file database: everything is in that one file (Grafeo adds a
+  `memory.grafeo.wal/` directory while it is open, and may keep a `memory.grafeo.spill/` directory next to it).
+  This is the format Grafeo recommends from 0.6 on.
+- Any other path, such as `./memory.db`, creates a WAL-directory database: a directory instead of a file. It still
+  works, but Grafeo 0.6 deprecates it in favor of the single-file format, so use a `.grafeo` path for new databases.
+- One process at a time can open a database for writing. Close your app, the CLI or the MCP server before another
+  one opens the same path.
+- Indexes are (re)created whenever a manager opens a database.
+
+### Upgrading Grafeo (0.5 to 0.6)
+
+grafeo-memory 0.2.3 requires `grafeo>=0.5.44,<0.6`, so it stays on Grafeo 0.5; Grafeo 0.6 support comes with
+grafeo-memory 0.3.0. Grafeo 0.6.0 writes a
+new file format, and the switch is one way:
+
+1. **Before the first open with 0.6**, stop every process that uses the database (your app, `grafeo-memory`,
+   `grafeo-memory-mcp`) and make a backup of the database file if you may want to go back.
+2. **The first read-write open with Grafeo 0.6** (any `MemoryManager`, the CLI or the MCP server) migrates a
+   `.grafeo` file written by 0.5.x. The old files are kept next to it, unchanged, as `memory.grafeo.pre-0.6` (and
+   `memory.grafeo.pre-0.6.wal/`). The migration needs free disk space for a copy of the database.
+3. **After that, Grafeo 0.5.x can no longer open the file.** To go back, follow
+   [Upgrading from 0.5](https://grafeo.dev/user-guide/persistence/persistent/#upgrading-from-05) in the Grafeo
+   docs.
+4. Grafeo 0.7 will not read 0.5.x files, so open each database once with 0.6 before upgrading further.
+
+For a WAL-directory database (a `db_path` without `.grafeo`), check the Grafeo 0.6 release notes for how it is
+carried over.
+
+Your memories, entities, relations and history are ordinary graph data, so they move with the file: grafeo-memory
+needs no migration step of its own.
+
+## Memory History
+
+`history(memory_id)` returns every change grafeo-memory made to a memory (ADD, UPDATE, DELETE), oldest first:
+
+```python
+mid = memory.add("I like tea", infer=False)[0].memory_id
+memory.update(mid, "I like green tea")
+memory.delete(mid)
+
+for entry in memory.history(mid):
+    print(entry.event, entry.old_text, entry.new_text, entry.timestamp)
+# ADD None I like tea ...
+# UPDATE I like tea I like green tea ...
+# DELETE I like green tea None ...
+```
+
+- History is stored as `:History` nodes in the same database, keyed by the memory id and not connected by edges,
+  so it survives closing and reopening the database and a `delete()` of the memory, and it does not change graph
+  algorithm scores.
+- grafeo-memory does not need Grafeo's change data capture (CDC is off by default and kept in memory only). A
+  database you pass in with `db=` keeps its CDC setting.
+- Only changes made through grafeo-memory are history; writes made directly with the Grafeo API are not.
+- grafeo-memory 0.2.0 to 0.2.2 read history from CDC and never stored it, so memories written by those versions
+  have no entries from before the upgrade.
+- `delete()` and `delete_all()` keep the history as an audit trail. Entries carry the `user_id`, so with the
+  database at hand (pass it in with `db=`) you can remove a user's history as well:
+
+```python
+import grafeo
+
+db = grafeo.GrafeoDB("./memory.grafeo")
+memory = MemoryManager("openai:gpt-4o-mini", config, embedder=embedder, db=db)
+
+memory.delete_all(user_id="alice")
+db.execute("MATCH (h:History) WHERE h.user_id = $uid DELETE h", {"uid": "alice"})
 ```
 
 ## Supported LLM Providers
@@ -196,7 +271,7 @@ Add to `claude_desktop_config.json`:
       "command": "grafeo-memory-mcp",
       "env": {
         "GRAFEO_MEMORY_MODEL": "openai:gpt-4o-mini",
-        "GRAFEO_MEMORY_DB": "./memory.db"
+        "GRAFEO_MEMORY_DB": "./memory.grafeo"
       }
     }
   }
@@ -261,7 +336,7 @@ config = MemoryConfig(instrument=InstrumentationSettings(
 
 | | Traditional stack | grafeo-memory |
 |---|---|---|
-| Infrastructure | Neo4j + Qdrant (Docker) | **Single .db file** |
+| Infrastructure | Neo4j + Qdrant (Docker) | **Single .grafeo file** |
 | Install size | ~750MB (Docker images) | **~16MB** (uv add) |
 | Offline/edge | Requires servers | **Yes** |
 | Graph + vector | Separate services | **Unified engine** |
@@ -275,12 +350,12 @@ config = MemoryConfig(instrument=InstrumentationSettings(
 - `MemoryManager(model, config=None, *, embedder)`: create memory manager. `model` is a pydantic-ai model string (e.g. `"openai:gpt-4o-mini"`)
 - `.add(messages, user_id=None, session_id=None, metadata=None, *, infer=True, importance=1.0, memory_type="semantic")` → `AddResult` (list of `MemoryEvent`)
 - `.search(query, user_id=None, k=10, *, filters=None, rerank=True, memory_type=None)` → `SearchResponse` (list of `SearchResult`)
-- `.update(memory_id, text)` → `MemoryEvent`: update a memory's text directly
+- `.update(memory_id, text)` → `MemoryEvent`: update a memory's text directly. Raises `ValueError` when `memory_id` is not a memory of this manager
 - `.get_all(user_id=None, memory_type=None)` → `list[SearchResult]`
-- `.delete(memory_id)` → `bool`
-- `.delete_all(user_id=None)` → `int` (count deleted)
+- `.delete(memory_id)` → `bool`: delete a memory with its edges (links to entities, session chain, provenance). `False` when `memory_id` is not a memory of this manager; other nodes in a shared database are never touched
+- `.delete_all(user_id=None)` → `int` (count deleted, expired memories included)
 - `.summarize(user_id=None, *, preserve_recent=5, batch_size=20)` → `AddResult`
-- `.history(memory_id)` → `list[HistoryEntry]`: returns change history sorted by timestamp (oldest first)
+- `.history(memory_id)` → `list[HistoryEntry]`: returns change history sorted by timestamp (oldest first), also for deleted memories (see [Memory History](#memory-history))
 - `.set_importance(memory_id, importance)` → `bool`
 - `.close()`: close the database
 
@@ -288,7 +363,7 @@ Use as a context manager: `with MemoryManager(...) as memory:`. Multiple session
 
 ### `MemoryConfig`
 
-- `db_path`: path to database file (None for in-memory)
+- `db_path`: path to the database, preferably ending in `.grafeo` (None for in-memory, see [Persistence](#persistence))
 - `user_id`: default user scope (default `"default"`)
 - `session_id`: default session scope
 - `agent_id`: default agent scope
@@ -338,11 +413,12 @@ grafeo-memory is part of the GrafeoDB ecosystem:
 - **[grafeo-mcp](https://github.com/GrafeoDB/grafeo-mcp)**: MCP server for raw GrafeoDB access
 - **grafeo-memory-mcp** (built-in): MCP server for the memory API (`uv add grafeo-memory[mcp]` or `pip install grafeo-memory[mcp]`)
 
-All packages share the same `.db` file. Build memories with grafeo-memory, query them with grafeo-langchain, expose them via MCP.
+All packages share the same database file. Build memories with grafeo-memory, query them with grafeo-langchain, expose them via MCP.
 
 ## Requirements
 
 - Python 3.12+
+- [grafeo](https://pypi.org/project/grafeo/) `>=0.5.44,<0.6` (installed automatically)
 
 ## License
 

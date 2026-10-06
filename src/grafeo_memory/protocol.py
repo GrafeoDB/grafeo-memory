@@ -56,9 +56,13 @@ class GrafeoDBProtocol(Protocol):
     All methods listed here are called without hasattr guards, so any
     conforming database must implement them.
 
-    Optional methods (hybrid_search, mmr_search, node_history,
-    batch_create_nodes_with_props, algorithms, close, detailed_stats)
-    are checked via hasattr at call sites and intentionally excluded.
+    Optional methods (hybrid_search, mmr_search, batch_create_nodes_with_props,
+    algorithms, close, detailed_stats) are checked via hasattr at call sites
+    and intentionally excluded.
+
+    ``execute`` must accept ``DETACH DELETE`` and ``SET`` statements: they
+    delete a node with its edges and stamp history nodes (see ``_graph.py``
+    and ``history.py``).
     """
 
     # -- Node CRUD --

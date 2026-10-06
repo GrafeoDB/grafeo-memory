@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+from dataclasses import replace
 
 from .protocol import GrafeoDBProtocol
 from .types import ENTITY_LABEL, HAS_ENTITY_EDGE, MEMORY_LABEL, MemoryConfig, SearchResult
@@ -97,22 +98,7 @@ def apply_importance_scoring(
             reinforcement=reinforcement,
         )
 
-        scored.append(
-            SearchResult(
-                memory_id=r.memory_id,
-                text=r.text,
-                score=composite,
-                user_id=r.user_id,
-                metadata=r.metadata,
-                relations=r.relations,
-                actor_id=r.actor_id,
-                role=r.role,
-                importance=importance,
-                access_count=access_count,
-                memory_type=r.memory_type,
-                source=r.source,
-            )
-        )
+        scored.append(replace(r, score=composite, importance=importance, access_count=access_count))
 
         # Update access stats (best-effort)
         try:
@@ -159,24 +145,7 @@ def apply_cross_session_boost(
         # Combine: pagerank captures global importance, betweenness captures bridging role
         algo_score = 0.7 * min(1.0, pr * 10) + 0.3 * min(1.0, bc * 10)
         boost = 1.0 + config.cross_session_factor * algo_score
-        boosted.append(
-            SearchResult(
-                memory_id=r.memory_id,
-                text=r.text,
-                score=r.score * boost,
-                user_id=r.user_id,
-                metadata=r.metadata,
-                relations=r.relations,
-                actor_id=r.actor_id,
-                role=r.role,
-                importance=r.importance,
-                access_count=r.access_count,
-                memory_type=r.memory_type,
-                source=r.source,
-                created_at=r.created_at,
-                expired_at=r.expired_at,
-            )
-        )
+        boosted.append(replace(r, score=r.score * boost))
 
     boosted.sort(key=lambda r: r.score, reverse=True)
     return boosted
@@ -201,22 +170,7 @@ def apply_topology_boost(
     for r in results:
         topo, _ = topo_cache.get(r.memory_id, (0.0, 0.0))
         boost = 1.0 + config.topology_boost_factor * topo
-        boosted.append(
-            SearchResult(
-                memory_id=r.memory_id,
-                text=r.text,
-                score=r.score * boost,
-                user_id=r.user_id,
-                metadata=r.metadata,
-                relations=r.relations,
-                actor_id=r.actor_id,
-                role=r.role,
-                importance=r.importance,
-                access_count=r.access_count,
-                memory_type=r.memory_type,
-                source=r.source,
-            )
-        )
+        boosted.append(replace(r, score=r.score * boost))
 
     boosted.sort(key=lambda r: r.score, reverse=True)
     return boosted

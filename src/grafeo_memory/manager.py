@@ -7,11 +7,14 @@ import contextlib
 import json
 import logging
 import time
+from collections.abc import Iterable
+from dataclasses import replace
 
 from ._compat import run_sync
+from ._graph import detach_delete_node, node_labels
 from .embedding import EmbeddingClient
 from .extraction import extract_async
-from .history import HistoryEntry, get_history, record_history
+from .history import HistoryEntry, adopt_legacy_history, get_history, record_history, record_history_batch
 from .messages import Message, parse_messages
 from .protocol import GrafeoDBProtocol
 from .reconciliation import reconcile_async, reconcile_relations_async
@@ -96,10 +99,11 @@ class _MemoryCore:
         """Create indexes for efficient memory queries.
 
         Vector and text indexes are label-scoped to Memory nodes. Property
-        indexes (user_id, created_at, memory_type, name) are database-wide
-        because GrafeoDB's ``create_property_index`` does not support
-        label-scoped indexing. In a shared database these indexes will also
-        cover non-memory nodes — harmless but slightly wasteful.
+        indexes (user_id, created_at, memory_type, graph_name, memory_id, name)
+        are database-wide because GrafeoDB's ``create_property_index`` does not
+        support label-scoped indexing. In a shared database these indexes will
+        also cover non-memory nodes, which is harmless but slightly wasteful.
+        ``memory_id`` serves the ``:History`` lookups of ``history()``.
         """
         vp = self._config.vector_property
         tp = self._config.text_property
@@ -126,7 +130,7 @@ class _MemoryCore:
             logger.debug("Text index creation deferred or already exists")
 
         # Property indexes for fast filtered lookups (database-wide; see docstring).
-        for prop in ("user_id", "created_at", "memory_type", "graph_name"):
+        for prop in ("user_id", "created_at", "memory_type", "graph_name", "memory_id"):
             with contextlib.suppress(Exception):
                 self._db.create_property_index(prop)
         with contextlib.suppress(Exception):
@@ -173,6 +177,58 @@ class _MemoryCore:
         if extra:
             filters.update(extra)
         return filters
+
+    # Ownership and history helpers
+
+    def _owned_memory(self, memory_id: str | int) -> tuple[int, dict] | None:
+        """Return ``(node_id, properties)`` when ``memory_id`` names a Memory node in this manager's scope.
+
+        Anything else (an invalid id, a missing node, a node of another label in
+        a shared database, a memory of another ``graph_name``) gives None, so the
+        public API never modifies or deletes nodes it does not own.
+        """
+        try:
+            node_id = int(memory_id)
+        except (TypeError, ValueError):
+            return None
+        node = self._db.get_node(node_id)
+        if node is None or MEMORY_LABEL not in node_labels(node):
+            return None
+        props = _get_props(node)
+        if self._config.graph_name and props.get("graph_name") != self._config.graph_name:
+            return None
+        return node_id, props
+
+    def _record_history(self, memory_id: str | int, entry: HistoryEntry, user_id: str | None) -> None:
+        record_history(self._db, int(memory_id), entry, user_id=user_id, graph_name=self._config.graph_name)
+
+    def _hard_delete_memory(self, memory_id: str | int, *, timestamp: int | None = None) -> bool:
+        """Delete a memory node and all its edges, then record a DELETE history entry.
+
+        Returns False (and changes nothing) when ``memory_id`` is not a memory
+        owned by this manager.
+        """
+        owned = self._owned_memory(memory_id)
+        if owned is None:
+            return False
+        node_id, props = owned
+        try:
+            adopt_legacy_history(self._db, node_id)
+        except Exception:
+            logger.warning("Could not keep the legacy history of memory %s reachable", node_id, exc_info=True)
+        if not detach_delete_node(self._db, node_id):
+            return False
+        self._record_history(
+            node_id,
+            HistoryEntry(
+                event="DELETE",
+                old_text=props.get("text", ""),
+                timestamp=timestamp if timestamp is not None else int(time.time() * 1000),
+            ),
+            props.get("user_id"),
+        )
+        self._graph_dirty = True
+        return True
 
     def _make_usage_collector(self):
         """Create a usage collector that accumulates RunUsage and optionally fires a user callback."""
@@ -272,7 +328,7 @@ class _MemoryCore:
             )
 
         fact_texts = [f.text for f in extraction.facts]
-        embeddings = self._embedder.embed(fact_texts)
+        embeddings = [_as_vector(e) for e in self._embedder.embed(fact_texts)]
 
         # Scope reconciliation to same memory type (only for procedural — semantic skips for backward compat)
         similar_filters = {"memory_type": mtype.value} if mtype != MemoryType.SEMANTIC else None
@@ -294,7 +350,8 @@ class _MemoryCore:
 
             decisions = await reconcile_async(self._model, extraction.facts, existing, _on_usage=on_usage)
 
-            # Execute memory mutations inside a transaction for atomicity
+            # Execute the memory mutations (direct writes, one call each). UPDATE and
+            # DELETE may only target the candidates the LLM was shown.
             events = await self._execute_decisions(
                 decisions,
                 embeddings,
@@ -308,6 +365,7 @@ class _MemoryCore:
                 importance=importance,
                 memory_type=mtype,
                 _on_usage=on_usage,
+                allowed_targets={str(m["id"]) for m in existing},
             )
 
             # Session ordering: episodes or LEADS_TO edges
@@ -398,7 +456,7 @@ class _MemoryCore:
             texts.append(text)
             actors.append((actor_id, role))
 
-        embeddings = self._embedder.embed(texts)
+        embeddings = [_as_vector(e) if e is not None else None for e in self._embedder.embed(texts)]
 
         # Build property dicts for all nodes
         mtype_val = memory_type.value if isinstance(memory_type, MemoryType) else memory_type
@@ -455,15 +513,19 @@ class _MemoryCore:
 
         self._ensure_vector_index()
 
-        # Record history and build events
+        # Record history (one batch call) and build events
+        record_history_batch(
+            self._db,
+            [
+                (int(nid), HistoryEntry(event="ADD", new_text=text, timestamp=timestamp, actor_id=actor_id, role=role))
+                for nid, text, (actor_id, role) in zip(node_ids, texts, actors, strict=True)
+            ],
+            user_id=user_id,
+            graph_name=self._config.graph_name,
+        )
         events: list[MemoryEvent] = []
         for nid, text, (actor_id, role) in zip(node_ids, texts, actors, strict=True):
             memory_id = str(nid)
-            record_history(
-                self._db,
-                int(memory_id),
-                HistoryEntry(event="ADD", new_text=text, timestamp=timestamp, actor_id=actor_id, role=role),
-            )
             events.append(
                 MemoryEvent(
                     action=MemoryAction.ADD,
@@ -503,10 +565,10 @@ class _MemoryCore:
             importance=importance,
             memory_type=memory_type,
         )
-        record_history(
-            self._db,
-            int(memory_id),
+        self._record_history(
+            memory_id,
             HistoryEntry(event="ADD", new_text=text, timestamp=timestamp, actor_id=actor_id, role=role),
+            user_id,
         )
         return [
             MemoryEvent(
@@ -563,7 +625,7 @@ class _MemoryCore:
         effective_k = k * 2 if temporal_hints.expand_limit else k
 
         # Embed query once, share across both search paths
-        query_embedding = self._embedder.embed([query])[0]
+        query_embedding = _as_vector(self._embedder.embed([query])[0])
 
         if _trace is not None:
             detail: dict = {"dimensions": len(query_embedding)}
@@ -672,21 +734,9 @@ class _MemoryCore:
             if v and g:
                 agreement_count += 1
                 best = v if v.score >= g.score else g
-                score = best.score * (1.0 + bonus)
-                seen[mid] = SearchResult(
-                    memory_id=best.memory_id,
-                    text=best.text,
-                    score=score,
-                    user_id=best.user_id,
-                    metadata=best.metadata,
-                    relations=best.relations,
-                    actor_id=best.actor_id,
-                    role=best.role,
-                    importance=best.importance,
-                    access_count=best.access_count,
-                    memory_type=best.memory_type,
-                    source="both",
-                )
+                # replace() keeps every other field (created_at, session_id, valid_at, ...),
+                # which the temporal filters, the point-in-time filter and grouping read.
+                seen[mid] = replace(best, score=best.score * (1.0 + bonus), source="both")
             elif v:
                 seen[mid] = v
             else:
@@ -834,13 +884,21 @@ class _MemoryCore:
         return ExplainResult(query=query, steps=trace, results=list(response))
 
     async def _update(self, memory_id: str, text: str) -> MemoryEvent:
-        """Update a memory's text directly. Re-embeds and records history."""
+        """Update a memory's text directly. Re-embeds and records history.
+
+        Raises:
+            ValueError: ``memory_id`` is not a memory owned by this manager.
+        """
         now_ms = int(time.time() * 1000)
+        owned = self._owned_memory(memory_id)
+        if owned is None:
+            raise ValueError(f"Memory {memory_id!r} not found")
+        node_id, props = owned
         old_text = self._update_memory(memory_id, text, now_ms)
-        record_history(
-            self._db,
-            int(memory_id),
+        self._record_history(
+            node_id,
             HistoryEntry(event="UPDATE", old_text=old_text, new_text=text, timestamp=now_ms),
+            props.get("user_id"),
         )
         return MemoryEvent(
             action=MemoryAction.UPDATE,
@@ -866,12 +924,30 @@ class _MemoryCore:
         importance: float = 1.0,
         memory_type: MemoryType = MemoryType.SEMANTIC,
         _on_usage=None,
+        allowed_targets: set[str] | None = None,
     ) -> list[MemoryEvent]:
         events: list[MemoryEvent] = []
         temporal = extraction.temporal_annotations
 
         for i, decision in enumerate(decisions):
             fact_valid_at, _ = temporal.get(i, (None, None))
+
+            # An UPDATE or DELETE may only act on a memory the LLM was shown as a
+            # candidate. Any other id (hallucinated, injected, another user's or
+            # a foreign node) is dropped, and the branches below handle the
+            # decision as one without a target (UPDATE becomes ADD, DELETE is skipped).
+            if (
+                allowed_targets is not None
+                and decision.target_memory_id
+                and decision.action in (MemoryAction.UPDATE, MemoryAction.DELETE)
+                and str(decision.target_memory_id) not in allowed_targets
+            ):
+                logger.warning(
+                    "%s targets memory %r, which was not a reconciliation candidate; ignoring the target",
+                    decision.action.value.upper(),
+                    decision.target_memory_id,
+                )
+                decision = replace(decision, target_memory_id=None)
 
             if decision.action == MemoryAction.ADD:
                 emb = embeddings[i] if i < len(embeddings) else None
@@ -888,12 +964,12 @@ class _MemoryCore:
                     memory_type=memory_type,
                     valid_at=fact_valid_at,
                 )
-                record_history(
-                    self._db,
-                    int(memory_id),
+                self._record_history(
+                    memory_id,
                     HistoryEntry(
                         event="ADD", new_text=decision.text, timestamp=timestamp, actor_id=actor_id, role=role
                     ),
+                    user_id,
                 )
                 events.append(
                     MemoryEvent(
@@ -923,12 +999,12 @@ class _MemoryCore:
                     memory_type=memory_type,
                     valid_at=fact_valid_at,
                 )
-                record_history(
-                    self._db,
-                    int(memory_id),
+                self._record_history(
+                    memory_id,
                     HistoryEntry(
                         event="ADD", new_text=decision.text, timestamp=timestamp, actor_id=actor_id, role=role
                     ),
+                    user_id,
                 )
                 events.append(
                     MemoryEvent(
@@ -974,9 +1050,8 @@ class _MemoryCore:
                 # Inherit entity edges from the expired memory so graph search
                 # can still reach the new memory via the old entity connections.
                 self._inherit_entity_edges(decision.target_memory_id, new_memory_id)
-                record_history(
-                    self._db,
-                    int(new_memory_id),
+                self._record_history(
+                    new_memory_id,
                     HistoryEntry(
                         event="UPDATE",
                         old_text=old_text,
@@ -985,6 +1060,7 @@ class _MemoryCore:
                         actor_id=actor_id,
                         role=role,
                     ),
+                    user_id,
                 )
                 events.append(
                     MemoryEvent(
@@ -1004,9 +1080,8 @@ class _MemoryCore:
 
             elif decision.action == MemoryAction.DELETE and decision.target_memory_id:
                 old_text = self._expire_memory(decision.target_memory_id, timestamp)
-                record_history(
-                    self._db,
-                    int(decision.target_memory_id),
+                self._record_history(
+                    decision.target_memory_id,
                     HistoryEntry(
                         event="DELETE",
                         old_text=old_text,
@@ -1014,6 +1089,7 @@ class _MemoryCore:
                         actor_id=actor_id,
                         role=role,
                     ),
+                    user_id,
                 )
                 events.append(
                     MemoryEvent(
@@ -1083,6 +1159,7 @@ class _MemoryCore:
         node_id = node.id if hasattr(node, "id") else node
 
         if embedding is not None:
+            embedding = _as_vector(embedding)
             if self._embedding_dims and len(embedding) != self._embedding_dims:
                 raise ValueError(f"Embedding dimension mismatch: got {len(embedding)}, expected {self._embedding_dims}")
             self._db.set_node_property(node_id, self._config.vector_property, embedding)
@@ -1091,40 +1168,18 @@ class _MemoryCore:
         return str(node_id)
 
     def _update_memory(self, memory_id: str, new_text: str, timestamp: int) -> str | None:
-        try:
-            node_id = int(memory_id)
-        except ValueError:
+        owned = self._owned_memory(memory_id)
+        if owned is None:
             return None
-
-        node = self._db.get_node(node_id)
-        if node is None:
-            return None
-
-        props = _get_props(node)
+        node_id, props = owned
         old_text = props.get("text", "")
 
         self._db.set_node_property(node_id, "text", new_text)
         self._db.set_node_property(node_id, "updated_at", timestamp)
 
-        new_embedding = self._embedder.embed([new_text])[0]
+        new_embedding = _as_vector(self._embedder.embed([new_text])[0])
         self._db.set_node_property(node_id, self._config.vector_property, new_embedding)
 
-        return old_text
-
-    def _delete_memory(self, memory_id: str) -> str | None:
-        try:
-            node_id = int(memory_id)
-        except ValueError:
-            return None
-
-        node = self._db.get_node(node_id)
-        if node is None:
-            return None
-
-        props = _get_props(node)
-        old_text = props.get("text", "")
-
-        self._db.delete_node(node_id)
         return old_text
 
     def _expire_memory(self, memory_id: str, timestamp: int, *, invalid_at: int | None = None) -> str | None:
@@ -1188,8 +1243,10 @@ class _MemoryCore:
         except Exception:
             return
 
+        # Latest by (created_at, node id): node ids only grow, so they order
+        # memories created within the same millisecond.
         prev_id: str | None = None
-        prev_ts: int = 0
+        prev_key: tuple[int, int] = (0, -1)
         for node_id, props in nodes:
             mid = str(node_id)
             if mid in new_set:
@@ -1203,9 +1260,9 @@ class _MemoryCore:
                 continue
             if props.get("expired_at") is not None:
                 continue
-            ts = int(props.get("created_at", 0))
-            if ts > prev_ts:
-                prev_ts = ts
+            key = (int(props.get("created_at", 0)), int(node_id))
+            if key > prev_key:
+                prev_key = key
                 prev_id = mid
 
         # Chain: prev → first new, then new[0] → new[1] → ...
@@ -1286,8 +1343,9 @@ class _MemoryCore:
         except Exception:
             return
 
+        # Latest by (created_at, node id), as in _link_session_chain.
         prev_id: str | None = None
-        prev_ts: int = 0
+        prev_key: tuple[int, int] = (0, -1)
         for node_id, props in nodes:
             mid = str(node_id)
             if mid == episode_id:
@@ -1297,9 +1355,9 @@ class _MemoryCore:
             node_run = props.get("run_id") or props.get("session_id")
             if node_run != run_id:
                 continue
-            ts = int(props.get("created_at", 0))
-            if ts > prev_ts:
-                prev_ts = ts
+            key = (int(props.get("created_at", 0)), int(node_id))
+            if key > prev_key:
+                prev_key = key
                 prev_id = mid
 
         if prev_id is not None:
@@ -1894,7 +1952,7 @@ class _MemoryCore:
             for text, embedding in zip(consolidated_texts, embeddings, strict=True):
                 memory_id = self._create_memory(text, embedding, uid, None, None, now_ms, None, None)
                 self._db.set_node_property(int(memory_id), "source", "summarize")
-                record_history(self._db, int(memory_id), HistoryEntry(event="ADD", new_text=text, timestamp=now_ms))
+                self._record_history(memory_id, HistoryEntry(event="ADD", new_text=text, timestamp=now_ms), uid)
                 all_events.append(MemoryEvent(action=MemoryAction.ADD, memory_id=memory_id, text=text))
                 new_memory_ids.append(int(memory_id))
 
@@ -1906,22 +1964,21 @@ class _MemoryCore:
                     except Exception:
                         logger.warning("Failed to create DERIVED_FROM edge %d->%s", new_mid, mid, exc_info=True)
 
-            # Delete originals (record history before deletion)
+            # Delete the originals with their edges; each deletion records a DELETE history entry.
             for mid, old_text, _ in batch:
-                record_history(self._db, int(mid), HistoryEntry(event="DELETE", old_text=old_text, timestamp=now_ms))
-                self._db.delete_node(int(mid))
-                all_events.append(MemoryEvent(action=MemoryAction.DELETE, memory_id=mid, old_text=old_text))
+                if self._hard_delete_memory(mid, timestamp=now_ms):
+                    all_events.append(MemoryEvent(action=MemoryAction.DELETE, memory_id=mid, old_text=old_text))
 
         return AddResult(all_events, usage=total)
 
     def _history_impl(self, memory_id: str) -> list[HistoryEntry]:
-        """Shared history implementation using graph-native History nodes."""
+        """Shared history implementation reading the durable ``:History`` nodes."""
         try:
             node_id = int(memory_id)
         except ValueError:
             return []
 
-        return get_history(self._db, node_id)
+        return get_history(self._db, node_id, graph_name=self._config.graph_name)
 
     def _stats_impl(self) -> MemoryStats:
         """Collect database introspection statistics."""
@@ -2017,15 +2074,21 @@ class _MemoryCore:
         """Set the base importance score for a memory."""
         if not 0.0 <= importance <= 1.0:
             raise ValueError("importance must be between 0.0 and 1.0")
-        try:
-            node_id = int(memory_id)
-        except ValueError:
+        owned = self._owned_memory(memory_id)
+        if owned is None:
             return False
-        node = self._db.get_node(node_id)
-        if node is None:
-            return False
-        self._db.set_node_property(node_id, "importance", importance)
+        self._db.set_node_property(owned[0], "importance", importance)
         return True
+
+
+def _as_vector(embedding: Iterable[float]) -> list[float]:
+    """Return an embedding as a list of Python floats.
+
+    The engine stores a property as a vector, and indexes it for vector search,
+    only when every element is a float. A list holding ints (or numpy scalars)
+    would be stored as a plain list and silently left out of vector search.
+    """
+    return [float(x) for x in embedding]
 
 
 def _valid_at_point(result: SearchResult, pit: int) -> bool:
@@ -2062,7 +2125,7 @@ class MemoryManager(_MemoryCore):
         from openai import OpenAI
         from grafeo_memory import MemoryManager, MemoryConfig, OpenAIEmbedder
 
-        config = MemoryConfig(db_path="./memory.db")
+        config = MemoryConfig(db_path="./memory.grafeo")
         embedder = OpenAIEmbedder(OpenAI())
 
         with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
@@ -2190,19 +2253,17 @@ class MemoryManager(_MemoryCore):
         return self._get_all_impl(user_id, memory_type=memory_type, include_expired=include_expired)
 
     def delete(self, memory_id: str) -> bool:
-        """Delete a specific memory by its ID."""
-        try:
-            node_id = int(memory_id)
-        except ValueError:
-            return False
-        return self._db.delete_node(node_id)
+        """Delete a memory and its edges by ID. Returns False when no such memory exists.
+
+        A DELETE entry is added to the memory's history, which stays readable.
+        """
+        return self._hard_delete_memory(memory_id)
 
     def delete_all(self, user_id: str | None = None) -> int:
-        """Delete all memories for a user. Returns the count of deleted memories."""
-        memories = self.get_all(user_id)
+        """Delete all memories for a user, expired ones included. Returns the count of deleted memories."""
         count = 0
-        for m in memories:
-            if self.delete(m.memory_id):
+        for m in self._get_all_impl(user_id, include_expired=True):
+            if self._hard_delete_memory(m.memory_id):
                 count += 1
         return count
 
@@ -2310,7 +2371,7 @@ class AsyncMemoryManager(_MemoryCore):
         from openai import OpenAI
         from grafeo_memory import AsyncMemoryManager, MemoryConfig, OpenAIEmbedder
 
-        config = MemoryConfig(db_path="./memory.db")
+        config = MemoryConfig(db_path="./memory.grafeo")
         embedder = OpenAIEmbedder(OpenAI())
 
         async with AsyncMemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
@@ -2418,19 +2479,17 @@ class AsyncMemoryManager(_MemoryCore):
         return self._get_all_impl(user_id, memory_type=memory_type, include_expired=include_expired)
 
     async def delete(self, memory_id: str) -> bool:
-        """Delete a specific memory by its ID."""
-        try:
-            node_id = int(memory_id)
-        except ValueError:
-            return False
-        return self._db.delete_node(node_id)
+        """Delete a memory and its edges by ID. Returns False when no such memory exists.
+
+        A DELETE entry is added to the memory's history, which stays readable.
+        """
+        return self._hard_delete_memory(memory_id)
 
     async def delete_all(self, user_id: str | None = None) -> int:
-        """Delete all memories for a user. Returns the count of deleted memories."""
-        memories = await self.get_all(user_id)
+        """Delete all memories for a user, expired ones included. Returns the count of deleted memories."""
         count = 0
-        for m in memories:
-            if await self.delete(m.memory_id):
+        for m in self._get_all_impl(user_id, include_expired=True):
+            if self._hard_delete_memory(m.memory_id):
                 count += 1
         return count
 

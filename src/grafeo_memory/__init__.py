@@ -96,4 +96,4 @@ __all__ = [
     "detect_temporal_hints",
 ]
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
