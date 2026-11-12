@@ -101,7 +101,7 @@ addopts = "--cov=grafeo_memory --cov-report=term-missing"
 # ── Coverage ─────────────────────────────────────────────────────────
 [tool.coverage.run]
 source = ["grafeo_memory"]
-omit = ["*/__init__.py"]
+omit = ["*/__init__.py", "grafeo_memory/bench/*"]  # harnesses need datasets and API keys; their offline gates run as subprocesses
 
 [tool.coverage.report]
 exclude_lines = [

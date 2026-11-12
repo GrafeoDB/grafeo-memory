@@ -303,3 +303,12 @@ class TestMCPSmokeAllTools:
             result_str = asyncio.run(tool_fn(*args, **kwargs))
             result = json.loads(result_str)
             assert isinstance(result, dict), f"{tool_fn.__name__} did not return a dict"
+
+
+def test_prompt_templates_render():
+    from grafeo_memory.mcp import prompts
+
+    for fn in (prompts.manage_memories, prompts.knowledge_capture):
+        target = getattr(fn, "fn", fn)  # the decorator may wrap the function
+        assert isinstance(target(), str) and target()
+    assert "travel" in getattr(prompts.manage_memories, "fn", prompts.manage_memories)("travel")

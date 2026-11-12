@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.0
-      - run: uv sync
+      - run: uv sync --all-extras  # optional imports (mcp, httpx, openai, ...) must resolve
       - run: uv run ty check
 
   test:
