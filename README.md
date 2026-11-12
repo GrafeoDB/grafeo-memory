@@ -20,15 +20,12 @@ grafeo-memory stack:  grafeo (single file) + LLM
 uv add grafeo-memory                   # base (bring your own LLM + embedder)
 uv add grafeo-memory[mistral]          # + Mistral embeddings
 uv add grafeo-memory[openai]           # + OpenAI embeddings
-uv add grafeo-memory[anthropic]        # + Anthropic embeddings
-uv add grafeo-memory[mcp]             # + MCP server for AI agents
-uv add grafeo-memory[all]              # all providers
-```
-
-Or with pip:
-
-```bash
-pip install grafeo-memory[openai]
+uv add grafeo-memory[anthropic]        # + Anthropic models
+uv add grafeo-memory[mcp]              # + MCP server for AI agents
+uv add grafeo-memory[jev]              # + TypeSafe Jev decision model (hosted, opt-in)
+uv add grafeo-memory[agent-framework]  # + Microsoft Agent Framework vector store
+uv add grafeo-memory[bench]            # + LOCOMO / LongMemEval / BEAM harnesses
+uv add grafeo-memory[all]              # all LLM providers
 ```
 
 ## Quick Start
@@ -61,7 +58,7 @@ with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
 ### Mistral
 
 ```python
-from mistralai import Mistral
+from mistralai.client import Mistral
 from grafeo_memory import MemoryManager, MemoryConfig, MistralEmbedder
 
 embedder = MistralEmbedder(Mistral())
@@ -98,6 +95,15 @@ grafeo-memory implements the **reconciliation loop**, the intelligence layer tha
          └────────────────────┘
 ```
 
+## Documentation
+
+- [docs/architecture.md](docs/architecture.md): the package layers and the import rules between them
+- [docs/benchmarks.md](docs/benchmarks.md): LOCOMO, LongMemEval and BEAM harnesses, matrix rounds, test gates
+
+Since 0.3.0 the modules live in layers (`grafeo_memory.common`, `.providers`, `.core`, `.services`).
+`from grafeo_memory import ...` is unchanged. Pre-0.3 module paths such as `grafeo_memory.manager` or
+`grafeo_memory.search.vector` still import, with a `DeprecationWarning` naming the new path; they are removed in 0.7.
+
 ## Multi-User Isolation
 
 ```python
@@ -118,40 +124,47 @@ with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
 ## Persistence
 
 ```python
-config = MemoryConfig(db_path="./memory.grafeo")  # single-file database
-config = MemoryConfig()                           # in memory, gone when the process ends
+config = MemoryConfig(db_path="./memory.grafeo")  # a database file
+config = MemoryConfig()  # in memory, gone when the process ends
 ```
 
-- A `db_path` ending in `.grafeo` is a single-file database: everything is in that one file (Grafeo adds a
-  `memory.grafeo.wal/` directory while it is open, and may keep a `memory.grafeo.spill/` directory next to it).
-  This is the format Grafeo recommends from 0.6 on.
-- Any other path, such as `./memory.db`, creates a WAL-directory database: a directory instead of a file. It still
-  works, but Grafeo 0.6 deprecates it in favor of the single-file format, so use a `.grafeo` path for new databases.
+- A `db_path` is always a single database file, whatever its extension. While it is open, Grafeo keeps its
+  write-ahead log in a `memory.grafeo.wal/` directory next to it, and removes it at close; a `memory.grafeo.spill/`
+  directory may appear when a query spills to disk. The directory that holds the file must be writable.
+- A `db_path` must not be an existing directory: Grafeo 0.6 refuses to open one (an empty one included) unless it is
+  a Grafeo 0.5 database (see below). Name a file inside it instead, such as `./memories/memory.grafeo`.
 - One process at a time can open a database for writing. Close your app, the CLI or the MCP server before another
   one opens the same path.
 - Indexes are (re)created whenever a manager opens a database.
 
 ### Upgrading Grafeo (0.5 to 0.6)
 
-grafeo-memory 0.2.3 requires `grafeo>=0.5.44,<0.6`, so it stays on Grafeo 0.5; Grafeo 0.6 support comes with
-grafeo-memory 0.3.0. Grafeo 0.6.0 writes a
-new file format, and the switch is one way:
+grafeo-memory 0.3.0 requires Grafeo 0.6.2 or later (`grafeo>=0.6.2,<0.7`); for Grafeo 0.5, stay on grafeo-memory 0.2.x.
+Grafeo 0.6 writes a new database format, and the switch is one way:
 
 1. **Before the first open with 0.6**, stop every process that uses the database (your app, `grafeo-memory`,
-   `grafeo-memory-mcp`) and make a backup of the database file if you may want to go back.
-2. **The first read-write open with Grafeo 0.6** (any `MemoryManager`, the CLI or the MCP server) migrates a
-   `.grafeo` file written by 0.5.x. The old files are kept next to it, unchanged, as `memory.grafeo.pre-0.6` (and
-   `memory.grafeo.pre-0.6.wal/`). The migration needs free disk space for a copy of the database.
-3. **After that, Grafeo 0.5.x can no longer open the file.** To go back, follow
-   [Upgrading from 0.5](https://grafeo.dev/user-guide/persistence/persistent/#upgrading-from-05) in the Grafeo
-   docs.
-4. Grafeo 0.7 will not read 0.5.x files, so open each database once with 0.6 before upgrading further.
+   `grafeo-memory-mcp`). The migration needs free disk space for a copy of the database.
+2. **The first open with Grafeo 0.6** (any `MemoryManager`, the CLI or the MCP server; they all open the database
+   for writing) migrates it, at the same path:
+   - a database file written by 0.5.x (`memory.grafeo`) is rewritten in the new format, and the old file is kept
+     next to it, unchanged, as `memory.grafeo.pre-0.6` (with `memory.grafeo.pre-0.6.wal/` if it had a
+     write-ahead log left);
+   - a 0.5.x WAL-directory database (a `db_path` without `.grafeo`, such as `./memory.db/`) becomes a database
+     file at that path, and the old directory is kept, unchanged, as `memory.db.pre-0.6/`. Its commits are replayed
+     into the file. Grafeo 0.5 did not log index definitions in that directory; grafeo-memory creates its indexes
+     again on open.
+3. **Later opens** find a 0.6 file: nothing migrates again and the `.pre-0.6` copy is left alone. Keep it until you
+   are sure you will not go back.
+4. **Grafeo 0.5 cannot open the migrated database.** To go back, stop the 0.6 processes, move the migrated file
+   away, rename the `.pre-0.6` file (or directory) to the original name and run grafeo-memory 0.2.x with
+   Grafeo 0.5.44. Changes made after the migration are only in the migrated file.
+5. Grafeo 0.7 will not read 0.5.x databases, so open each one once with 0.6 before upgrading further.
 
-For a WAL-directory database (a `db_path` without `.grafeo`), check the Grafeo 0.6 release notes for how it is
-carried over.
-
-Your memories, entities, relations and history are ordinary graph data, so they move with the file: grafeo-memory
-needs no migration step of its own.
+Your memories, embeddings, entities, relations, communities and history are ordinary graph data, so they move with
+the database: grafeo-memory needs no migration step of its own, and vector search works on the migrated database
+right away. History written by grafeo-memory 0.2.3 (`:History` nodes) and by 0.1.x (`HAS_HISTORY` edges) carries
+over. grafeo-memory 0.2.2 read history from Grafeo's change data capture, which Grafeo 0.5 keeps in memory only, so
+a 0.2.2 database holds no history to carry over.
 
 ## Memory History
 
@@ -195,19 +208,19 @@ db.execute("MATCH (h:History) WHERE h.user_id = $uid DELETE h", {"uid": "alice"}
 grafeo-memory uses [pydantic-ai](https://ai.pydantic.dev) model strings, so any provider pydantic-ai supports works out of the box:
 
 ```python
-# OpenAI — use OpenAIEmbedder for embeddings
+# OpenAI: use OpenAIEmbedder for embeddings
 MemoryManager("openai:gpt-4o-mini", config, embedder=OpenAIEmbedder(OpenAI()))
 
-# Anthropic — pair with OpenAI or custom embedder
+# Anthropic: pair with OpenAI or custom embedder
 MemoryManager("anthropic:claude-sonnet-4-5-20250929", config, embedder=embedder)
 
-# Groq — pair with OpenAI or custom embedder
+# Groq: pair with OpenAI or custom embedder
 MemoryManager("groq:llama-3.3-70b-versatile", config, embedder=embedder)
 
-# Mistral — use MistralEmbedder for embeddings
+# Mistral: use MistralEmbedder for embeddings
 MemoryManager("mistral:mistral-small-latest", config, embedder=MistralEmbedder(Mistral()))
 
-# Google — pair with OpenAI or custom embedder
+# Google: pair with OpenAI or custom embedder
 MemoryManager("google-gla:gemini-2.0-flash", config, embedder=embedder)
 ```
 
@@ -239,6 +252,7 @@ Implement the `EmbeddingClient` protocol to use any embedding provider:
 ```python
 from grafeo_memory import EmbeddingClient
 
+
 class MyEmbedder:
     def embed(self, texts: list[str]) -> list[list[float]]:
         # Call your embedding API
@@ -248,8 +262,66 @@ class MyEmbedder:
     def dimensions(self) -> int:
         return 1024  # your model's output dimensions
 
+
 memory = MemoryManager("openai:gpt-4o-mini", config, embedder=MyEmbedder())
 ```
+
+## Decision Engines and Pipeline Toggles
+
+Every judgment in the write path can run on the LLM (the default), on a decision model that answers typed
+questions with a calibrated confidence, or on both: `hybrid` asks the decision model first and sends only the
+facts it is unsure of to one LLM call. Extraction always uses the LLM.
+
+```python
+from grafeo_memory import Engine, MemoryConfig, PipelineConfig, StageConfig
+
+config = MemoryConfig(
+    db_path="./memory.grafeo",
+    decision_model="jev",  # or "fake" (offline), or a provider registered under "grafeo_memory.decision_models"
+    pipeline=PipelineConfig(
+        memories=StageConfig(engine=Engine.HYBRID, confidence_threshold=0.75),
+        relations=StageConfig(engine=Engine.HYBRID),
+        temporal_precheck=True,  # a fact whose stated validity overlaps no candidate is added without a model call
+        ontology=True,  # entity names resolve to existing entities; relations that break domain/range are not written
+    ),
+)
+```
+
+| Stage | Engines | What it decides |
+| --- | --- | --- |
+| `memories` | `llm`, `decision`, `hybrid` | ADD / UPDATE / DELETE / NONE for each new fact |
+| `relations` | `llm`, `decision`, `hybrid` | Which existing relations a new relation invalidates |
+| `search` | `llm` (no decision rerank), `decision`, `hybrid` | Rerank score blended by `rerank_blend_weight`; `hybrid` keeps the retrieval score where the model is unsure |
+| `facts`, `entities`, `temporal` | `llm` only | Extraction (generates text) |
+
+Custom providers implement `DecisionModel.decide_async(state, questions)` and register with
+`register_decision_model(name, factory)`; `FakeDecisionModel` is a deterministic stand-in for tests.
+
+**Data leaving the device.** The default pipeline sends text only to the LLM and embedder you configure. With
+`decision_model="jev"` (extra `jev`, key in `TYPESAFE_API_KEY`), the reconciliation state (the new facts and the
+candidate memories they are compared with) is also sent to TypeSafe's hosted API. `temporal_precheck`, `ontology`
+and `compile()` run locally and send nothing.
+
+All `PipelineConfig` toggles default to off, which is the 0.2 pipeline:
+
+| Toggle | Effect |
+| --- | --- |
+| `temporal_precheck` | Pure-code interval check before reconciliation |
+| `ontology` | Deterministic entity normalization and relation-type checks before graph writes |
+| `bitemporal`, `episodes` | Same as `MemoryConfig.enable_bitemporal` / `enable_episodes` |
+| `compile` | Read by the benchmark harnesses only; applications call `memory.compile()` |
+| `taxonomy`, `policy`, `bucket` | Reserved for later layers: a warning at startup, no effect |
+
+`memory.compile()` (also `await amemory.acompile()`) is an offline pass to run after write batches: entities of the
+same type and scope whose names embed nearly identically (cosine >= 0.92) merge into the older node, which keeps
+their edges, and relations that break the controlled vocabulary are reported. It makes no LLM call.
+
+### LLM call cache
+
+`MemoryConfig(cache=True)` (or `CacheConfig(...)`; for the CLI and MCP server, `GRAFEO_MEMORY_CACHE_ENABLED=true`) caches LLM, embedding
+and decision-model calls in memory and, for a file database, in `<db_path>.llmcache.jsonl`, so an identical call is
+answered without reaching the provider. The cache file holds prompts and responses, which include memory text;
+delete it together with the database, or call `MemoryCache.clear()`.
 
 ## MCP Server
 
@@ -257,7 +329,6 @@ grafeo-memory includes a built-in MCP server so AI agents (Claude Desktop, Curso
 
 ```bash
 uv add grafeo-memory[mcp]
-# or: pip install grafeo-memory[mcp]
 ```
 
 ### Claude Desktop
@@ -326,10 +397,12 @@ For custom providers:
 ```python
 from grafeo_memory import InstrumentationSettings
 
-config = MemoryConfig(instrument=InstrumentationSettings(
-    tracer_provider=my_tracer_provider,
-    include_content=False,
-))
+config = MemoryConfig(
+    instrument=InstrumentationSettings(
+        tracer_provider=my_tracer_provider,
+        include_content=False,
+    )
+)
 ```
 
 ## Why grafeo-memory?
@@ -377,6 +450,11 @@ Use as a context manager: `with MemoryManager(...) as memory:`. Multiple session
 - `topology_boost_factor`: strength of topology boost (default 0.2)
 - `consolidation_protect_threshold`: protect well-connected memories from summarize (default 0.0, off)
 - `instrument`: OpenTelemetry instrumentation, `True` or `InstrumentationSettings` (default False)
+- `decision_model`: decision model for non-LLM pipeline stages, a name or a `DecisionModel` (default None)
+- `pipeline`: `PipelineConfig`, the engine per stage and the layer toggles (default: LLM everywhere, toggles off)
+- `cache`: `True` or `CacheConfig` to cache LLM, embedding and decision calls (default False)
+- `history_retention`: grafeo history retention for time travel: `"off"`, `"forever"`, a `timedelta` or seconds (default None, grafeo's default)
+- `db_memory_limit_bytes`, `db_spill_limit_bytes`: grafeo memory and spill caps (default None, grafeo's machine default)
 
 ### `EmbeddingClient` (Protocol)
 
@@ -411,14 +489,14 @@ grafeo-memory is part of the GrafeoDB ecosystem:
 - **[grafeo-langchain](https://github.com/GrafeoDB/grafeo-langchain)**: LangChain integration
 - **[grafeo-llamaindex](https://github.com/GrafeoDB/grafeo-llamaindex)**: LlamaIndex integration
 - **[grafeo-mcp](https://github.com/GrafeoDB/grafeo-mcp)**: MCP server for raw GrafeoDB access
-- **grafeo-memory-mcp** (built-in): MCP server for the memory API (`uv add grafeo-memory[mcp]` or `pip install grafeo-memory[mcp]`)
+- **grafeo-memory-mcp** (built-in): MCP server for the memory API (`uv add grafeo-memory[mcp]`)
 
 All packages share the same database file. Build memories with grafeo-memory, query them with grafeo-langchain, expose them via MCP.
 
 ## Requirements
 
 - Python 3.12+
-- [grafeo](https://pypi.org/project/grafeo/) `>=0.5.44,<0.6` (installed automatically)
+- [grafeo](https://pypi.org/project/grafeo/) `>=0.6.2,<0.7` (installed automatically)
 
 ## License
 

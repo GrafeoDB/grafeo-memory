@@ -1,9 +1,9 @@
-"""Vision / multimodal — extract memories from images.
+"""Vision / multimodal, extract memories from images.
 
 grafeo-memory can process images via a vision-capable LLM:
 1. Images are described as text by the LLM
 2. Text descriptions flow through normal extraction
-3. No images are stored — only the extracted facts
+3. No images are stored, only the extracted facts
 
 Messages use the OpenAI multimodal content format.
 

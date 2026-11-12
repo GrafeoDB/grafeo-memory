@@ -1,4 +1,4 @@
-"""LLM usage tracking — monitor token consumption.
+"""LLM usage tracking, monitor token consumption.
 
 grafeo-memory tracks LLM usage across all operations:
 1. Per-operation callbacks via MemoryConfig.usage_callback

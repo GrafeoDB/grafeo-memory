@@ -1,4 +1,4 @@
-"""Mistral quick-start — using grafeo-memory with Mistral models.
+"""Mistral quick-start, using grafeo-memory with Mistral models.
 
 Demonstrates the full workflow with Mistral as both the LLM and
 embedding provider: add, reconcile, search, and history.
@@ -8,7 +8,7 @@ Requires:
     MISTRAL_API_KEY environment variable
 """
 
-from mistralai import Mistral
+from mistralai.client import Mistral
 
 from grafeo_memory import MemoryConfig, MemoryManager, MistralEmbedder
 
@@ -33,8 +33,8 @@ def main():
 
         # --- Reconciliation: update a contradicting fact ---
         print()
-        print("Adding: 'I just switched jobs — I now work at Google as a staff engineer'")
-        events = memory.add("I just switched jobs — I now work at Google as a staff engineer")
+        print("Adding: 'I just switched jobs: I now work at Google as a staff engineer'")
+        events = memory.add("I just switched jobs: I now work at Google as a staff engineer")
         for e in events:
             print(f"  [{e.action.value.upper()}] {e.text}")
             if e.old_text:

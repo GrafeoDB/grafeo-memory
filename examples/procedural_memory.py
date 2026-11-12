@@ -1,4 +1,4 @@
-"""Procedural memory — storing instructions, preferences, and rules.
+"""Procedural memory, storing instructions, preferences, and rules.
 
 grafeo-memory supports two memory types:
 - semantic (default): facts, biographical details, events

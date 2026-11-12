@@ -1,4 +1,4 @@
-"""Async API — use grafeo-memory in async applications.
+"""Async API, use grafeo-memory in async applications.
 
 AsyncMemoryManager provides the same API as MemoryManager
 but with async/await support for frameworks like FastAPI, aiohttp, etc.
