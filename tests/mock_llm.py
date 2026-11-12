@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import struct
 
 from pydantic_ai.messages import ModelResponse, ToolCallPart
@@ -35,6 +36,11 @@ class MockEmbedder:
         floats = []
         for i in range(self._dims):
             (val,) = struct.unpack_from("<f", h, i * 4)
+            if not math.isfinite(val):
+                # The bytes spell NaN or an infinity: take them as an unsigned int instead.
+                # grafeo 0.6 refuses a vector with NaN or an infinity (GRAFEO-V001).
+                (raw,) = struct.unpack_from("<I", h, i * 4)
+                val = raw / 2**32 * 2.0 - 1.0
             floats.append(val / (abs(val) + 1.0))  # Squash to (-1, 1)
         # Normalize to unit vector
         norm = sum(f * f for f in floats) ** 0.5

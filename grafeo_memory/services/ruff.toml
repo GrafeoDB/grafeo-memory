@@ -1,0 +1,8 @@
+# SERVICES (facades) import core/providers/common, never entry points/bench.
+extend = "../../pyproject.toml"
+
+[lint.flake8-tidy-imports.banned-api]
+"grafeo_memory.cli" = { msg = "Architecture violation: cli is a top-level entry point" }
+"grafeo_memory.mcp" = { msg = "Architecture violation: mcp is a top-level entry point" }
+"grafeo_memory.bench" = { msg = "Architecture violation: only the CLI loads grafeo_memory.bench" }
+"grafeo_memory.agent_framework" = { msg = "Architecture violation: agent_framework is a top-level entry point" }

@@ -2,7 +2,7 @@ name: Engine compatibility
 
 # Runs the suite against the newest grafeo releases on PyPI, pre-releases
 # included, so an engine change that breaks grafeo-memory shows up before
-# users hit it. tests/test_grafeo_contract.py names the engine behavior that
+# users hit it. tests/test_core/test_grafeo_contract.py names the engine behavior that
 # changed.
 #
 # - within-pin: the newest grafeo that the requirement in pyproject.toml accepts
@@ -26,8 +26,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         grafeo: [within-pin, newest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
         with:
           python-version: "3.13"
       - run: uv sync --all-extras --no-sources
@@ -40,6 +40,6 @@ jobs:
       - name: Engine under test
         run: uv run --no-sync python -c "import grafeo; print(grafeo.__version__, grafeo.build_info())"
       - name: Engine contract
-        run: uv run --no-sync pytest tests/test_grafeo_contract.py -v --no-cov
+        run: uv run --no-sync pytest tests/test_core/test_grafeo_contract.py -v --no-cov
       - name: Full suite
         run: uv run --no-sync pytest -v

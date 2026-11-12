@@ -1,0 +1,6 @@
+# Package-root modules (__init__, compat shims, agent_framework adapter).
+# Nobody but the CLI loads grafeo_memory.bench.
+extend = "../pyproject.toml"
+
+[lint.flake8-tidy-imports.banned-api]
+"grafeo_memory.bench" = { msg = "Architecture violation: only the CLI loads grafeo_memory.bench explicitly" }

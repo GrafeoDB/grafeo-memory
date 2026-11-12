@@ -1,6 +1,6 @@
 [project]
 name = "grafeo-memory"
-version = "0.2.3"
+version = "0.3.0"
 description = "AI memory layer powered by GrafeoDB's hybrid graph and vector database"
 readme = "README.md"
 license = "Apache-2.0"
@@ -10,12 +10,19 @@ keywords = ["memory", "ai", "graph", "database", "llm", "rag", "knowledge-graph"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Database :: Database Engines/Servers",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "grafeo>=0.5.44,<0.6",
-    "pydantic-ai-slim",
+    "grafeo>=0.6.2,<0.7",
+    "pydantic-ai-slim>=1.96",
+    "pydantic-settings>=2.6",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -24,8 +31,18 @@ anthropic = ["pydantic-ai-slim[anthropic]"]
 google = ["pydantic-ai-slim[google]"]
 groq = ["pydantic-ai-slim[groq]"]
 mistral = ["pydantic-ai-slim[mistral]", "mistralai>=1.0"]
-mcp = ["mcp>=1.26,<2"]
-all = ["pydantic-ai-slim[openai,anthropic,google,groq,mistral]", "openai>=1.0", "mistralai>=1.0"]
+mcp = ["mcp>=2.2,<3"]
+# Microsoft Agent Framework vector-store adapter (grafeo_memory.agent_framework)
+agent-framework = ["agent-framework-core>=1.25,<2"]
+# TypeSafe Jev decision model (grafeo_memory.providers.decision.jev): hosted System One
+# API for non-LLM pipeline stages; sends reconciliation state to TypeSafe when used
+jev = ["httpx>=0.27"]
+# Benchmark harnesses (grafeo_memory.bench) - LOCOMO / LongMemEval / BEAM
+bench = ["mistralai>=1.0", "nltk>=3.9", "numpy>=2", "pyarrow>=18"]
+all = ["pydantic-ai-slim[openai,anthropic,google,groq,mistral]", "openai>=1.0", "mistralai>=1.0", "httpx>=0.27"]
+
+[project.entry-points."grafeo_memory.decision_models"]
+jev = "grafeo_memory.providers.decision.jev:JevDecisionModel"
 
 [project.scripts]
 grafeo-memory = "grafeo_memory.cli:main"
@@ -41,7 +58,11 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/grafeo_memory"]
+packages = ["grafeo_memory"]
+
+[tool.hatch.build.targets.sdist]
+# Internal notes and local run data never ship, whatever the local gitignore says.
+exclude = [".claude/", ".benchmarks/", "coverage.xml", "*.grafeo", "*.llmcache.jsonl"]
 
 # ── Ruff ──────────────────────────────────────────────────────────────
 [tool.ruff]
@@ -57,14 +78,14 @@ python-version = "3.12"
 
 [tool.ty.src]
 # Tests use mocks/stubs that intentionally don't conform to production protocols.
-exclude = ["tests/"]
+exclude = ["tests/", "grafeo_memory/bench"]
 
 # Downgrade rules that produce false positives from Rust-extension deps
 # without type stubs (grafeo), pydantic-ai Agent overloads, and optional
 # dependencies (openai, mistralai) not installed in CI.
 [tool.ty.rules]
-unresolved-import = "warn"
-unresolved-attribute = "warn"
+import-not-found = "warn"
+missing-attribute = "warn"
 invalid-argument-type = "warn"
 no-matching-overload = "warn"
 invalid-return-type = "warn"
@@ -96,5 +117,6 @@ dev = [
     "pytest-cov>=7",
     "ruff>=0.15",
     "ty>=0.0.26",
+    "agent-framework-core>=1.25,<2",
 ]
 
