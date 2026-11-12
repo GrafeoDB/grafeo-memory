@@ -19,7 +19,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from grafeo_memory.common.intervals import intervals_overlap
-from grafeo_memory.common.types import ENTITY_LABEL, RELATION_EDGE, SearchResult
+from grafeo_memory.common.types import ENTITY_LABEL, HAS_ENTITY_EDGE, MEMORY_LABEL, RELATION_EDGE, SearchResult
 from grafeo_memory.core.ontology.normalize import cosine
 from grafeo_memory.core.ontology.scheme import normalize_key
 from grafeo_memory.core.reconciliation.temporal import extract_interval
@@ -66,6 +66,36 @@ def _entity_names(m: _MemoryCore, uid: str) -> dict[str, str]:
         logger.debug("retrieval: entity name query failed", exc_info=True)
     m._entity_name_cache[uid] = (m._write_version, names)
     return names
+
+
+_HUB_MIN_MEMORIES = 20  # below this, shares are too coarse to call anything a hub
+
+
+def hubs(m: _MemoryCore, uid: str) -> set[str]:
+    """Entity names tied to more than ``retrieval.hub_share`` of the user's memories (cached per write)."""
+    share = m._config.retrieval.hub_share
+    if share >= 1.0:
+        return set()
+    cached = m._hub_cache.get(uid)
+    if cached is not None and cached[0] == (m._write_version, share):
+        return cached[1]
+    out: set[str] = set()
+    try:
+        total_rows = m._db.execute(
+            f"MATCH (x:{MEMORY_LABEL}) WHERE x.user_id = $uid RETURN count(x) AS n", {"uid": uid}
+        )
+        total = int(total_rows[0]["n"]) if total_rows else 0
+        if total >= _HUB_MIN_MEMORIES:
+            rows = m._db.execute(
+                f"MATCH (x:{MEMORY_LABEL})-[:{HAS_ENTITY_EDGE}]->(e:{ENTITY_LABEL}) WHERE e.user_id = $uid "
+                "RETURN e.name AS name, count(DISTINCT x) AS n",
+                {"uid": uid},
+            )
+            out = {str(r["name"]) for r in rows if isinstance(r, dict) and r.get("name") and r["n"] > share * total}
+    except Exception:
+        logger.debug("retrieval: hub query failed", exc_info=True)
+    m._hub_cache[uid] = ((m._write_version, share), out)
+    return out
 
 
 def query_entities(m: _MemoryCore, uid: str, query: str, extracted: list[str]) -> list[str]:

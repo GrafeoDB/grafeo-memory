@@ -208,6 +208,10 @@ class RetrievalConfig:
     expansion_depth: int = 1  # relation hops from the mentioned entities (0 = only them)
     deterministic_boost: float = 0.2  # score multiplier bonus for memories in the deterministic set
     deterministic_cap: int = 200  # max memories pulled from the deterministic set
+    # Entities tied to more than this share of a user's memories (conversation speakers,
+    # the user themself) are hubs: boosting them boosts everything, so deterministic-first
+    # neither anchors on them nor adds them by expansion. 1.0 keeps every entity.
+    hub_share: float = 0.3
     # Allen filter: when the query names a time, memories whose interval overlaps it
     # get temporal_boost, disjoint ones lose it.
     temporal_filter: bool = False
@@ -560,6 +564,8 @@ class MemoryConfig:
                 raise ValueError(f"policy.shape_severity values must be violation/warning/info, got {sev!r}")
         if self.retrieval.expansion_depth < 0:
             raise ValueError("retrieval.expansion_depth must be >= 0")
+        if not 0.0 < self.retrieval.hub_share <= 1.0:
+            raise ValueError("retrieval.hub_share must be in (0, 1]")
         if self.compilation.every_n_adds < 0:
             raise ValueError("compilation.every_n_adds must be >= 0")
         if self.tiers.working.token_budget <= 0 or self.tiers.working.window_messages <= 0:

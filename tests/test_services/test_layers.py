@@ -398,6 +398,42 @@ class TestOntologyAndRetrieval:
         step = next(s for s in ex.steps if s.name == "deterministic_first")
         assert step.detail["entities"] == ["Acme"] and step.detail["memories"] == 1
 
+    @staticmethod
+    def _speaker_graph(m: MemoryManager, n_memories: int) -> None:
+        from grafeo_memory.common.types import ENTITY_LABEL, HAS_ENTITY_EDGE, MEMORY_LABEL
+
+        db = m._db
+        alice = db.create_node([ENTITY_LABEL], {"name": "Alice", "user_id": "u"})
+        acme = db.create_node([ENTITY_LABEL], {"name": "Acme", "user_id": "u"})
+        for i in range(n_memories):
+            mem = db.create_node([MEMORY_LABEL], {"text": f"alice fact {i}", "user_id": "u"})
+            db.create_edge(mem.id, alice.id, HAS_ENTITY_EDGE)
+            if i < 3:
+                db.create_edge(mem.id, acme.id, HAS_ENTITY_EDGE)
+
+    @pytest.mark.parametrize(
+        ("n_memories", "hub_share", "expected"),
+        [(25, 0.3, {"Alice"}), (25, 1.0, set()), (10, 0.3, set())],
+    )
+    def test_hubs_are_entities_on_most_memories(self, n_memories, hub_share, expected):
+        from grafeo_memory.services import retrieval
+
+        m = MemoryManager(
+            QueueModel([]).model(),
+            MemoryConfig(
+                user_id="u",
+                embedding_dimensions=4,
+                retrieval=RetrievalConfig(order="deterministic", hub_share=hub_share),
+            ),
+            embedder=VecEmbedder(),
+        )
+        self._speaker_graph(m, n_memories)
+        assert retrieval.hubs(m, "u") == expected
+
+    def test_hub_share_is_validated(self):
+        with pytest.raises(ValueError, match="hub_share"):
+            MemoryConfig(retrieval=RetrievalConfig(hub_share=0.0))
+
 
 # --- Layer A ---------------------------------------------------------------------
 

@@ -170,6 +170,7 @@ class _MemoryCore:
         self._taxonomies: dict = {}
         self._prominence_cache: dict[str, tuple[int, dict[str, int]]] = {}
         self._entity_name_cache: dict[str, tuple[int, dict[str, str]]] = {}
+        self._hub_cache: dict[str, tuple[tuple[int, float], set[str]]] = {}
         self._write_version = 0
         self._windows: dict[str, list[dict]] = {}
         self._summaries: dict[str, str] = {}
@@ -1107,8 +1108,10 @@ class _MemoryCore:
         if cfg.retrieval.order == "deterministic":
             from grafeo_memory.services.scoping import memories_of_entities
 
-            named = retrieval.query_entities(self, uid, query, query_entity_names)
+            hub_names = retrieval.hubs(self, uid)
+            named = [n for n in retrieval.query_entities(self, uid, query, query_entity_names) if n not in hub_names]
             expanded = retrieval.expand(self, uid, named, cfg.retrieval.expansion_depth) if named else []
+            expanded = [n for n in expanded if n not in hub_names]
             members = memories_of_entities(self, uid, expanded)
             final = retrieval.apply_deterministic(self, uid, final, members, query_embedding, include_expired)
             if _trace is not None:
