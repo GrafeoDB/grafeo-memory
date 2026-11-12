@@ -36,9 +36,20 @@ import re
 import time
 from pathlib import Path
 
-from grafeo_memory.bench.common import data_dir, default_cache, load_env, suite_runs
+from grafeo_memory.bench.common import (
+    add_set_argument,
+    apply_overrides,
+    data_dir,
+    default_cache,
+    ingest_complete,
+    load_env,
+    remove_db,
+    require_bench_deps,
+    suite_runs,
+)
 
 load_env()
+require_bench_deps()
 
 from mistralai.client import Mistral
 
@@ -97,24 +108,31 @@ def parse_date(s: str):
 async def ingest_question(args, client, item, run_dir, cache, tracker) -> dict:
     qid = item["question_id"]
     db_path = run_dir / f"db_{qid}.grafeo"
-    config = MemoryConfig(
-        db_path=str(db_path),
-        user_id=qid,
-        embedding_dimensions=1024,
-        reconciliation_threshold=args.recon_threshold,
-        enable_bitemporal=args.bitemporal,
-        chronological_sort=False,
-        hybrid_rrf_k=args.rrf_k,
-        custom_fact_prompt=BETTER_EXTRACTION_PROMPT,
-        cache=CacheConfig(
-            persist_path=args.cache_path,
-            max_entries=2_000_000,  # the byte cap bounds memory; never evict replayable calls by count
-            max_memory_bytes=512 * 1024 * 1024,
-            max_storage_bytes=4 * 1024 * 1024 * 1024,
+    log_path = run_dir / f"ingest_{qid}.json"
+    if ingest_complete(log_path):  # resumable: re-adding would duplicate memories
+        return json.loads(log_path.read_text())
+    remove_db(db_path)  # a partial or errored ingest restarts from an empty db
+    config = apply_overrides(
+        MemoryConfig(
+            db_path=str(db_path),
+            user_id=qid,
+            embedding_dimensions=1024,
+            reconciliation_threshold=args.recon_threshold,
+            enable_bitemporal=args.bitemporal,
+            chronological_sort=False,
+            hybrid_rrf_k=args.rrf_k,
+            custom_fact_prompt=BETTER_EXTRACTION_PROMPT,
+            cache=CacheConfig(
+                persist_path=args.cache_path,
+                max_entries=2_000_000,  # the byte cap bounds memory; never evict replayable calls by count
+                max_memory_bytes=512 * 1024 * 1024,
+                max_storage_bytes=4 * 1024 * 1024 * 1024,
+            ),
+            pipeline=build_pipeline(args),
+            decision_model=getattr(args, "_dm", None),
+            usage_callback=tracker,
         ),
-        pipeline=build_pipeline(args),
-        decision_model=getattr(args, "_dm", None),
-        usage_callback=tracker,
+        getattr(args, "set", None),
     )
     embedder = MistralEmbedder(client)
     log: dict = {"question_id": qid, "sessions": 0, "errors": [], "events": 0}
@@ -134,13 +152,11 @@ async def ingest_question(args, client, item, run_dir, cache, tracker) -> dict:
                 log["events"] += len(res)
             except Exception as e:
                 log["errors"].append({"session": sid, "error": repr(e)[:200]})
-    if getattr(args, "compile", False):
-        cres = mem.compile()
-        if asyncio.iscoroutine(cres):
-            cres = await cres
-        log["compile"] = cres.__dict__ if hasattr(cres, "__dict__") else str(cres)
+        if getattr(args, "compile", False):  # inside the manager: the db closes on exit
+            cres = await mem.acompile()
+            log["compile"] = json.loads(json.dumps(cres, default=lambda o: getattr(o, "__dict__", str(o))))
     log["ingest_s"] = round(time.perf_counter() - t0, 1)
-    with open(run_dir / f"ingest_{qid}.json", "w") as f:
+    with open(log_path, "w") as f:
         json.dump(log, f)
     return log
 
@@ -150,23 +166,26 @@ async def qa_question(args, client, item, run_dir, ans_cache: Cache, judge_cache
     db_path = run_dir / f"db_{qid}.grafeo"
     if not db_path.exists():
         raise RuntimeError(f"run ingest first for {qid}")
-    config = MemoryConfig(
-        db_path=str(db_path),
-        user_id=qid,
-        embedding_dimensions=1024,
-        reconciliation_threshold=args.recon_threshold,
-        search_min_score=args.min_score,
-        graph_search_depth=args.graph_depth,
-        chronological_sort=False,
-        hybrid_rrf_k=args.rrf_k,
-        cache=CacheConfig(
-            persist_path=args.cache_path,
-            max_entries=2_000_000,  # the byte cap bounds memory; never evict replayable calls by count
-            max_memory_bytes=512 * 1024 * 1024,
-            max_storage_bytes=4 * 1024 * 1024 * 1024,
+    config = apply_overrides(
+        MemoryConfig(
+            db_path=str(db_path),
+            user_id=qid,
+            embedding_dimensions=1024,
+            reconciliation_threshold=args.recon_threshold,
+            search_min_score=args.min_score,
+            graph_search_depth=args.graph_depth,
+            chronological_sort=False,
+            hybrid_rrf_k=args.rrf_k,
+            cache=CacheConfig(
+                persist_path=args.cache_path,
+                max_entries=2_000_000,  # the byte cap bounds memory; never evict replayable calls by count
+                max_memory_bytes=512 * 1024 * 1024,
+                max_storage_bytes=4 * 1024 * 1024 * 1024,
+            ),
+            pipeline=build_pipeline(args),
+            decision_model=getattr(args, "_dm", None),
         ),
-        pipeline=build_pipeline(args),
-        decision_model=getattr(args, "_dm", None),
+        getattr(args, "set", None),
     )
     embedder = MistralEmbedder(client)
     q = item["question"]
@@ -226,20 +245,30 @@ async def qa_question(args, client, item, run_dir, ans_cache: Cache, judge_cache
     return rec
 
 
-def score_run(args, run_dir: Path) -> dict:
-    items = {x["question_id"]: x for x in load_questions()}
-    recs = []
-    for p in sorted(run_dir.glob("qa_*.json")):
+def score_run(args, run_dir: Path, ids: list[str], failed: set[str] | frozenset[str] = frozenset()) -> dict:
+    """Score the selected questions only; ones without a fresh qa file count as missing."""
+    recs, missing = [], 0
+    for qid in ids:
+        p = run_dir / f"qa_{qid}.json"
+        if qid in failed or not p.exists():
+            missing += 1
+            continue
         recs.append(json.load(open(p)))
     per_cat: dict[str, list[float]] = {}
     for r in recs:
         per_cat.setdefault(r["question_type"], []).append(r["judge_score"])
+    correct = sum(r["judge_score"] for r in recs)
+    ev = [r["evidence_recall_at_k"] for r in recs if r["evidence_recall_at_k"] is not None]
     summary = {
         "run": run_dir.name,
         "n": len(recs),
-        "overall_accuracy": round(sum(r["judge_score"] for r in recs) / len(recs), 4) if recs else None,
+        "n_selected": len(ids),
+        "missing": missing,
+        "overall_accuracy": round(correct / len(recs), 4) if recs else None,
+        # missing (failed or never answered) questions count as wrong here
+        "accuracy_over_selected": round(correct / len(ids), 4) if ids else None,
         "per_category": {k: round(sum(v) / len(v), 4) for k, v in sorted(per_cat.items())},
-        "evidence_recall": round(sum(r["evidence_recall_at_k"] or 0.0 for r in recs) / len(recs), 4) if recs else None,
+        "evidence_recall": round(sum(ev) / len(ev), 4) if ev else None,  # questions with evidence only
     }
     with open(run_dir / "summary.json", "w") as f:
         json.dump(summary, f, indent=1)
@@ -285,6 +314,8 @@ async def run_all(args) -> None:
     if non_llm and args._dm is None:
         raise SystemExit("non-LLM pipeline engine requires --decision-model")
 
+    ids = [item["question_id"] for item in items]
+    failed: set[str] = set()
     if args.phase in ("ingest", "all"):
         sem = asyncio.Semaphore(args.workers)
         t0 = time.perf_counter()
@@ -317,12 +348,13 @@ async def run_all(args) -> None:
                     with open(run_dir / f"qa_{item['question_id']}.json", "w") as f:
                         json.dump(rec, f)
                 except Exception as e:
+                    failed.add(item["question_id"])
                     print(f"[qa] {item['question_id']} FAILED: {e!r}", flush=True)
 
         await asyncio.gather(*[one(it) for it in items])
         print(f"[qa] done: {len(items)} questions in {time.perf_counter() - t0:.0f}s", flush=True)
     if args.phase in ("score", "all"):
-        score_run(args, run_dir)
+        score_run(args, run_dir, ids, failed)
 
     cs = cache.stats()
     print(
@@ -372,9 +404,10 @@ def main() -> None:
         "--ontology", action="store_true", help="entity normalization rungs 1-2 + controlled relation-type validation"
     )
     ap.add_argument("--compile", action="store_true", help="Layer E: run memory.compile() after ingest")
-    ap.add_argument("--taxonomy", action="store_true", help="Layer B: faceted-taxonomy scoping (not implemented yet)")
-    ap.add_argument("--policy", action="store_true", help="Layer F: policy cascade rule packs (not implemented yet)")
-    ap.add_argument("--bucket", action="store_true", help="Layer G: open-decisions bucket (not implemented yet)")
+    ap.add_argument("--taxonomy", action="store_true", help="Layer B: faceted-taxonomy scoping")
+    ap.add_argument("--policy", action="store_true", help="Layer F: policy cascade rule packs")
+    ap.add_argument("--bucket", action="store_true", help="Layer G: open-decisions bucket")
+    add_set_argument(ap)
     args = ap.parse_args()
     asyncio.run(run_all(args))
 

@@ -31,7 +31,7 @@ from grafeo_memory.bench.common import PY, REPO, suite_runs
 
 RUNS = suite_runs("locomo")
 
-# $/M tokens (assumptions for the cost column; override with --price)
+# $/M tokens (assumptions for the cost column; edit DEFAULT_PRICES to change them)
 DEFAULT_PRICES = {
     "mistral-small-latest": (0.2, 0.6),
     "mistral-large-latest": (2.0, 6.0),
@@ -120,6 +120,9 @@ def cells_for_round(round_id: int) -> list[dict]:
             cell("r4_hybrid", decision_model="jev", memories_engine="hybrid", relations_engine="hybrid"),
         ]
     # --- Layer D/E/F benchmark rounds (flags wired in as layers land; off by default) ---
+    # Rounds 5 and 6 are confounded: the off cell is LLM, the on cell is hybrid jev, so
+    # the delta mixes engine and flag. Names are kept so existing results stay valid;
+    # for the flag alone compare the on cell against r10_hyb (same engines, no flag).
     if round_id == 5:  # Layer D temporal pre-model rules
         return [
             cell("r5_temporal_off"),
@@ -252,6 +255,59 @@ def cells_for_round(round_id: int) -> list[dict]:
             cell("r13_bitemp_off", **base_kw),
             cell("r13_bitemp_on", extra_flags=["--bitemporal"], **base_kw),
         ]
+    # --- 0.3.0 layer rounds: one knob per cell on the llm k=100 base (the 0.3.0 LOCOMO best);
+    # every cell sets its knobs with --set, so new variables need no new flags.
+    k100 = ["--k", "100"]
+    hyb = dict(decision_model="jev", memories_engine="hybrid", relations_engine="hybrid")
+
+    def sets(*kv: str) -> list[str]:
+        return [x for item in kv for x in ("--set", item)]
+
+    if round_id == 14:  # Layer G: park below the floor instead of escalating (hybrid base)
+        return [
+            cell("r14_bucket_off", extra_flags=k100, **hyb),
+            cell("r14_floor0.4", extra_flags=k100 + sets("bucket.enabled=true", "bucket.floor=0.4"), **hyb),
+            cell("r14_floor0.6", extra_flags=k100 + sets("bucket.enabled=true", "bucket.floor=0.6"), **hyb),
+            cell(
+                "r14_floor0.6_pen",
+                extra_flags=k100 + sets("bucket.enabled=true", "bucket.floor=0.6", "bucket.provisional_penalty=0.3"),
+                **hyb,
+            ),
+        ]
+    if round_id == 15:  # Layer F: rule packs
+        return [
+            cell("r15_policy_off", extra_flags=k100),
+            cell("r15_policy_all", extra_flags=[*k100, "--policy"]),
+            cell("r15_compliance_only", extra_flags=[*k100, "--policy", *sets("policy.packs=compliance")]),
+        ]
+    if round_id == 16:  # Layer B: scoping off / soft / filter
+        return [
+            cell("r16_tax_off", extra_flags=k100),
+            cell("r16_tax_soft", extra_flags=[*k100, "--taxonomy"]),
+            cell("r16_tax_filter", extra_flags=[*k100, "--taxonomy", *sets("taxonomy.mode=filter")]),
+        ]
+    if round_id == 17:  # Layer D: retrieval order and the Allen filter
+        return [
+            cell("r17_vector", extra_flags=k100),
+            cell("r17_det_d0", extra_flags=k100 + sets("retrieval.order=deterministic", "retrieval.expansion_depth=0")),
+            cell("r17_det_d1", extra_flags=k100 + sets("retrieval.order=deterministic")),
+            cell("r17_allen", extra_flags=k100 + sets("retrieval.temporal_filter=true")),
+        ]
+    if round_id == 18:  # Layer D: write-time rung 3 and interval closing
+        return [
+            cell("r18_onto_off", extra_flags=k100),
+            cell("r18_onto_r3", extra_flags=[*k100, "--ontology", *sets("ontology.write_embedding_rung=true")]),
+            cell("r18_closing", extra_flags=k100 + sets("ontology.interval_closing=true")),
+        ]
+    if round_id == 19:  # Layer E: compile with growth + certified ranking (lifecycle promotion)
+        return [
+            cell("r19_base", extra_flags=k100),
+            cell(
+                "r19_certified",
+                extra_flags=[*k100, "--policy", *sets("policy.packs=lifecycle", "retrieval.certified_boost=0.2")],
+            ),
+            cell("r19_compile_tax", extra_flags=[*k100, "--compile", "--taxonomy"]),
+        ]
     raise ValueError(f"unknown round {round_id}")
 
 
@@ -315,6 +371,9 @@ def aggregate(cells: list[dict]) -> list[dict]:
             "cell": cell["name"],
             "config": {k: v for k, v in cell.items() if k != "name" and v not in ("", "llm")} or "llm-all",
         }
+        for key in ("judge_overall_1_4", "judge_per_cat", "f1_overall_1_4", "evidence_recall", "n_questions"):
+            row[key] = None
+        row["est_cost_usd"] = None
         sp = run_dir / "summary.json"
         if sp.exists():
             s = json.load(open(sp))
@@ -387,7 +446,7 @@ def print_table(rows: list[dict]) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--round", type=int, default=0, help="matrix round id (0-13)")
+    ap.add_argument("--round", type=int, default=0, help="matrix round id (0-19)")
     ap.add_argument("--convs", default="all")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument(
@@ -395,12 +454,17 @@ def main() -> None:
     )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--report", action="store_true", help="only aggregate existing runs")
-    ap.add_argument("--only", default="", help="comma-separated cell names to run/report")
+    ap.add_argument("--only", default="", help="comma-separated cell names to run and print")
     args = ap.parse_args()
 
-    cells = cells_for_round(args.round)
+    all_cells = cells_for_round(args.round)
+    cells = all_cells
     if args.only:
-        cells = [c for c in cells if c["name"] in args.only.split(",")]
+        wanted = [x.strip() for x in args.only.split(",") if x.strip()]
+        unknown = sorted(set(wanted) - {c["name"] for c in all_cells})
+        if unknown:
+            raise SystemExit(f"--only: no such cell(s) in round {args.round}: {', '.join(unknown)}")
+        cells = [c for c in all_cells if c["name"] in wanted]
 
     extra = args.extra.split() if args.extra else []
     if not args.report:
@@ -423,11 +487,14 @@ def main() -> None:
             else:
                 print(f"cell {cell['name']} FAILED twice, continuing with the next cell", flush=True)
 
-    rows = aggregate(cells)
+    # the round file always covers every cell (read back from disk), so --only never truncates it
+    rows = aggregate(all_cells)
     RUNS.mkdir(exist_ok=True)
     out = RUNS / f"matrix_round{args.round}_results.json"
     json.dump({"round": args.round, "convs": args.convs, "limit": args.limit, "rows": rows}, open(out, "w"), indent=1)
     print(f"\n=== matrix round {args.round} (convs={args.convs}, limit={args.limit or 'all'}) -> {out}")
+    shown = {c["name"] for c in cells}
+    rows = [r for r in rows if r["cell"] in shown]
     print_table(rows)
     for r in rows:
         if r.get("judge_per_cat"):

@@ -49,6 +49,14 @@ def percentile(xs: list[float], p: float) -> float:
     return xs[i]
 
 
+def peak_rss_mb() -> float | None:
+    """Peak RSS in MiB: ``ru_maxrss`` is KiB on Linux, bytes on macOS; None on Windows."""
+    if resource is None:
+        return None
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return round(rss / (1024 * 1024) if sys.platform == "darwin" else rss / 1024, 1)
+
+
 def dir_size(path: str) -> int:
     total = 0
     for root, _dirs, files in os.walk(path):
@@ -77,7 +85,8 @@ def bench_raw_vector_layer(args) -> dict:
         sims_f[~mask] = -np.inf
         gt_filtered.append(np.argsort(-sims_f)[:k])
 
-    tmp = tempfile.mkdtemp(prefix="grafeo-bench-")
+    tmpdir = tempfile.TemporaryDirectory(prefix="grafeo-bench-", ignore_cleanup_errors=True)
+    tmp = tmpdir.name
     db_path = os.path.join(tmp, "bench.grafeo")
     db = grafeo.GrafeoDB(db_path)
 
@@ -133,6 +142,7 @@ def bench_raw_vector_layer(args) -> dict:
 
     db.close()
     size = dir_size(tmp)
+    tmpdir.cleanup()
     return {
         "config": {"n": n, "dims": d, "k": k, "queries": nq, "users": args.users, "batch": args.batch},
         "index_create_s": round(t_index, 2),
@@ -140,9 +150,7 @@ def bench_raw_vector_layer(args) -> dict:
         "insert_per_s": round(n / t_insert, 1),
         "db_bytes": size,
         "bytes_per_node": round(size / n, 1),
-        "peak_rss_mb": (
-            round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024 / 1024, 1) if resource is not None else None
-        ),
+        "peak_rss_mb": peak_rss_mb(),
         "sweep": sweep,
     }
 
@@ -157,7 +165,8 @@ def bench_manager_e2e(args) -> dict:
     texts = [f"fact number {i} about topic {i % 50}" for i in range(n)]
     model = make_test_model([{"entities": [], "relations": []}] * (args.queries + 10))
     embedder = MockEmbedder(d)
-    tmp = tempfile.mkdtemp(prefix="grafeo-e2e-")
+    tmpdir = tempfile.TemporaryDirectory(prefix="grafeo-e2e-", ignore_cleanup_errors=True)
+    tmp = tmpdir.name
     config = MemoryConfig(db_path=os.path.join(tmp, "e2e.grafeo"), user_id="bench", embedding_dimensions=d)
 
     t0 = time.perf_counter()
@@ -181,6 +190,7 @@ def bench_manager_e2e(args) -> dict:
         t_total = time.perf_counter() - t0
 
     size = dir_size(tmp)
+    tmpdir.cleanup()
     return {
         "config": {"n": n, "dims": d, "k": k, "queries": args.queries},
         "add_batch_s": round(t_add, 2),

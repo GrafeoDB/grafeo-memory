@@ -33,9 +33,20 @@ import json
 import time
 from pathlib import Path
 
-from grafeo_memory.bench.common import data_dir, default_cache, load_env, suite_runs
+from grafeo_memory.bench.common import (
+    add_set_argument,
+    apply_overrides,
+    data_dir,
+    default_cache,
+    ingest_complete,
+    load_env,
+    remove_db,
+    require_bench_deps,
+    suite_runs,
+)
 
 load_env()
+require_bench_deps()
 
 from mistralai.client import Mistral
 
@@ -99,6 +110,16 @@ def load_split(split: str) -> list[dict]:
     return pq.read_table(path).to_pylist()
 
 
+def last_anchor(row: dict) -> str:
+    """The latest session time anchor: the "now" at which the probing questions are asked."""
+    anchor = ""
+    for session in row["chat"]:
+        for m in session:
+            if m.get("time_anchor"):
+                anchor = m["time_anchor"]
+    return anchor
+
+
 def probing_items(row: dict) -> list[dict]:
     pq_raw = row["probing_questions"]
     data = ast.literal_eval(pq_raw) if isinstance(pq_raw, str) else pq_raw
@@ -114,24 +135,32 @@ def probing_items(row: dict) -> list[dict]:
 async def ingest_conv(args, client, row, run_dir, tracker) -> dict:
     cid = row["conversation_id"]
     db_path = run_dir / f"db_{cid}.grafeo"
-    config = MemoryConfig(
-        db_path=str(db_path),
-        user_id=cid,
-        embedding_dimensions=1024,
-        reconciliation_threshold=args.recon_threshold,
-        enable_bitemporal=args.bitemporal,
-        chronological_sort=False,
-        hybrid_rrf_k=args.rrf_k,
-        custom_fact_prompt=BETTER_EXTRACTION_PROMPT,
-        cache=CacheConfig(
-            persist_path=args.cache_path,
-            max_entries=2_000_000,  # the byte cap bounds memory; never evict replayable calls by count
-            max_memory_bytes=512 * 1024 * 1024,
-            max_storage_bytes=4 * 1024 * 1024 * 1024,
+    log_path = run_dir / f"ingest_{cid}.json"
+    if ingest_complete(log_path):  # resumable: re-adding would duplicate memories
+        print(f"[ingest] {cid}: already ingested, skipping", flush=True)
+        return json.loads(log_path.read_text())
+    remove_db(db_path)  # a partial or errored ingest restarts from an empty db
+    config = apply_overrides(
+        MemoryConfig(
+            db_path=str(db_path),
+            user_id=cid,
+            embedding_dimensions=1024,
+            reconciliation_threshold=args.recon_threshold,
+            enable_bitemporal=args.bitemporal,
+            chronological_sort=False,
+            hybrid_rrf_k=args.rrf_k,
+            custom_fact_prompt=BETTER_EXTRACTION_PROMPT,
+            cache=CacheConfig(
+                persist_path=args.cache_path,
+                max_entries=2_000_000,  # the byte cap bounds memory; never evict replayable calls by count
+                max_memory_bytes=512 * 1024 * 1024,
+                max_storage_bytes=4 * 1024 * 1024 * 1024,
+            ),
+            pipeline=build_pipeline(args),
+            decision_model=getattr(args, "_dm", None),
+            usage_callback=tracker,
         ),
-        pipeline=build_pipeline(args),
-        decision_model=getattr(args, "_dm", None),
-        usage_callback=tracker,
+        getattr(args, "set", None),
     )
     embedder = MistralEmbedder(client)
     log = {"conversation_id": cid, "sessions": 0, "errors": []}
@@ -150,42 +179,45 @@ async def ingest_conv(args, client, row, run_dir, tracker) -> dict:
                 log["sessions"] += 1
             except Exception as e:
                 log["errors"].append({"session": i, "error": repr(e)[:200]})
-    if getattr(args, "compile", False):
-        cres = mem.compile()
-        if asyncio.iscoroutine(cres):
-            cres = await cres
-        log["compile"] = cres.__dict__ if hasattr(cres, "__dict__") else str(cres)
+        if getattr(args, "compile", False):  # inside the manager: the db closes on exit
+            cres = await mem.acompile()
+            log["compile"] = json.loads(json.dumps(cres, default=lambda o: getattr(o, "__dict__", str(o))))
     log["ingest_s"] = round(time.perf_counter() - t0, 1)
-    with open(run_dir / f"ingest_{cid}.json", "w") as f:
+    with open(log_path, "w") as f:
         json.dump(log, f)
     print(f"[ingest] {cid}: {log['sessions']} sessions, errors={len(log['errors'])}, {log['ingest_s']}s", flush=True)
     return log
 
 
 async def qa_conv(args, client, row, run_dir, ans_cache: Cache, judge_cache: Cache, cache) -> list[dict]:
+    """Answer and judge one conversation's probing questions, --workers at a time (per conversation)."""
     cid = row["conversation_id"]
     db_path = run_dir / f"db_{cid}.grafeo"
     if not db_path.exists():
         raise RuntimeError(f"run ingest first for {cid}")
-    config = MemoryConfig(
-        db_path=str(db_path),
-        user_id=cid,
-        embedding_dimensions=1024,
-        reconciliation_threshold=args.recon_threshold,
-        chronological_sort=False,
-        hybrid_rrf_k=args.rrf_k,
-        cache=CacheConfig(
-            persist_path=args.cache_path,
-            max_entries=2_000_000,  # the byte cap bounds memory; never evict replayable calls by count
-            max_memory_bytes=512 * 1024 * 1024,
-            max_storage_bytes=4 * 1024 * 1024 * 1024,
+    config = apply_overrides(
+        MemoryConfig(
+            db_path=str(db_path),
+            user_id=cid,
+            embedding_dimensions=1024,
+            reconciliation_threshold=args.recon_threshold,
+            chronological_sort=False,
+            hybrid_rrf_k=args.rrf_k,
+            cache=CacheConfig(
+                persist_path=args.cache_path,
+                max_entries=2_000_000,  # the byte cap bounds memory; never evict replayable calls by count
+                max_memory_bytes=512 * 1024 * 1024,
+                max_storage_bytes=4 * 1024 * 1024 * 1024,
+            ),
+            pipeline=build_pipeline(args),
+            decision_model=getattr(args, "_dm", None),
         ),
-        pipeline=build_pipeline(args),
-        decision_model=getattr(args, "_dm", None),
+        getattr(args, "set", None),
     )
     embedder = MistralEmbedder(client)
     sem = asyncio.Semaphore(args.workers)
     items = probing_items(row)
+    anchor = last_anchor(row)
     async with AsyncMemoryManager(args.ingest_model, config, embedder=embedder) as mem:
 
         async def one(it: dict) -> dict:
@@ -193,7 +225,7 @@ async def qa_conv(args, client, row, run_dir, ans_cache: Cache, judge_cache: Cac
                 q = it["question"]
                 res = await with_retry(lambda: mem.search(q, k=args.retrieval_k, user_id=cid, rerank=False))
                 mems = "\n".join(f"- [{r.session_id}] {r.text}" for r in res[: args.k])
-                prompt = ANSWER_PROMPT.format(anchor="", q=q, mems=mems)
+                prompt = ANSWER_PROMPT.format(anchor=anchor, q=q, mems=mems)
                 akey = hashlib.sha1((args.answer_model + prompt).encode()).hexdigest()
                 pred = ans_cache.get(akey)
                 if pred is None:
@@ -206,7 +238,7 @@ async def qa_conv(args, client, row, run_dir, ans_cache: Cache, judge_cache: Cac
                     verdict = await asyncio.to_thread(call_mistral, client, args.judge_model, jprompt, 100, cache=cache)
                     judge_cache.put(jkey, verdict)
                 try:
-                    score = float(verdict.strip().rstrip(".").replace("0.0", "0"))
+                    score = float(verdict.strip().rstrip("."))
                     score = min(max(score, 0.0), 1.0)
                 except ValueError:
                     score = (
@@ -220,9 +252,14 @@ async def qa_conv(args, client, row, run_dir, ans_cache: Cache, judge_cache: Cac
     return list(recs)
 
 
-def score_run(args, run_dir: Path) -> dict:
-    recs = []
-    for p in sorted(run_dir.glob("qa_*.json")):
+def score_run(args, run_dir: Path, ids: list[str], failed: set[str] | frozenset[str] = frozenset()) -> dict:
+    """Score the selected conversations only; ones without a fresh qa file are listed as missing."""
+    recs, missing = [], []
+    for cid in ids:
+        p = run_dir / f"qa_{cid}.json"
+        if cid in failed or not p.exists():
+            missing.append(cid)
+            continue
         recs.extend(json.load(open(p)))
     per_type: dict[str, list[float]] = {}
     for r in recs:
@@ -231,6 +268,8 @@ def score_run(args, run_dir: Path) -> dict:
         "run": run_dir.name,
         "split": args.split,
         "n": len(recs),
+        "convs_scored": len(ids) - len(missing),
+        "convs_missing": missing,
         "overall_score": round(sum(r["score"] for r in recs) / len(recs), 4) if recs else None,
         "per_type": {k: round(sum(v) / len(v), 4) for k, v in sorted(per_type.items())},
     }
@@ -275,6 +314,8 @@ async def run_all(args) -> None:
     if non_llm and args._dm is None:
         raise SystemExit("non-LLM pipeline engine requires --decision-model")
 
+    ids = [str(r["conversation_id"]) for r in selected]
+    failed: set[str] = set()
     if args.phase in ("ingest", "all"):
         sem = asyncio.Semaphore(args.workers)
 
@@ -295,11 +336,12 @@ async def run_all(args) -> None:
                     with open(run_dir / f"qa_{row['conversation_id']}.json", "w") as f:
                         json.dump(recs, f)
                 except Exception as e:
+                    failed.add(str(row["conversation_id"]))
                     print(f"[qa] {row['conversation_id']} FAILED: {e!r}", flush=True)
 
         await asyncio.gather(*[one(r) for r in selected])
     if args.phase in ("score", "all"):
-        score_run(args, run_dir)
+        score_run(args, run_dir, ids, failed)
 
     cs = cache.stats()
     print(f"[cache] hits={cs['hits']} misses={cs['misses']} hit_rate={cs['hit_rate']} entries={cs['entries']}")
@@ -325,7 +367,12 @@ def main() -> None:
     ap.add_argument("--ingest-model", default="mistral:mistral-small-latest")
     ap.add_argument("--answer-model", default="mistral-small-latest")
     ap.add_argument("--judge-model", default="mistral-small-latest")
-    ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="conversations in parallel, and questions in parallel within each (up to workers**2 calls)",
+    )
     ap.add_argument("--cache-path", default=CACHE_PATH)
     ap.add_argument("--decision-model", default="")
     ap.add_argument("--memories-engine", default="llm", choices=["llm", "decision", "hybrid"])
@@ -345,9 +392,10 @@ def main() -> None:
         "--ontology", action="store_true", help="entity normalization rungs 1-2 + controlled relation-type validation"
     )
     ap.add_argument("--compile", action="store_true", help="Layer E: run memory.compile() after ingest")
-    ap.add_argument("--taxonomy", action="store_true", help="Layer B: faceted-taxonomy scoping (not implemented yet)")
-    ap.add_argument("--policy", action="store_true", help="Layer F: policy cascade rule packs (not implemented yet)")
-    ap.add_argument("--bucket", action="store_true", help="Layer G: open-decisions bucket (not implemented yet)")
+    ap.add_argument("--taxonomy", action="store_true", help="Layer B: faceted-taxonomy scoping")
+    ap.add_argument("--policy", action="store_true", help="Layer F: policy cascade rule packs")
+    ap.add_argument("--bucket", action="store_true", help="Layer G: open-decisions bucket")
+    add_set_argument(ap)
     args = ap.parse_args()
     asyncio.run(run_all(args))
 

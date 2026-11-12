@@ -62,19 +62,47 @@ def test_layer_flags_present_in_future_rounds():
     assert "--compile" in r.stdout
 
 
+SCOREBOARD_KEYS = ("judge_overall_1_4", "f1_overall_1_4", "evidence_recall", "n_questions", "est_cost_usd")
+
+
+def _runs() -> Path:
+    return Path(os.environ["GRAFEO_MEMORY_BENCH_HOME"]) / "locomo_runs"
+
+
 def test_report_schema():
-    r = _matrix("--round", "0", "--report")
+    # one finished cell (seeded) and one never run: both rows carry the full scoreboard schema
+    seeded = _runs() / "mx_r1_decision_perfact"
+    seeded.mkdir(parents=True)
+    summary = {
+        "llm_judge": {"overall_cats_1_4": 0.5, "per_category": {}, "n": 2},
+        "f1": {"overall_cats_1_4": 0.4},
+        "evidence_recall": {"overall_cats_1_4": 0.9},
+    }
+    (seeded / "summary.json").write_text(json.dumps(summary))
+    (seeded / "usage.json").write_text(json.dumps({"llm": {"ops": {}}, "mistral_direct": {}}))
+    r = _matrix("--round", "1", "--report")
     assert r.returncode == 0, r.stderr
-    out = Path(os.environ["GRAFEO_MEMORY_BENCH_HOME"]) / "locomo_runs" / "matrix_round0_results.json"
+    out = _runs() / "matrix_round1_results.json"
     assert out.exists()
     data = json.loads(out.read_text())
-    assert data["round"] == 0 and data["rows"], "report must carry rows"
-    for row in data["rows"]:
-        assert "cell" in row and "config" in row
-        # if a run exists, it must have the full scoreboard schema
-        if row.get("judge_overall_1_4") is not None:
-            for key in ("judge_overall_1_4", "f1_overall_1_4", "evidence_recall", "n_questions", "est_cost_usd"):
-                assert key in row, f"missing {key} in {row['cell']}"
+    assert data["round"] == 1 and data["rows"], "report must carry rows"
+    rows = {row["cell"]: row for row in data["rows"]}
+    for row in rows.values():
+        assert "config" in row
+        for key in SCOREBOARD_KEYS:
+            assert key in row, f"missing {key} in {row['cell']}"
+    assert rows["r1_decision_perfact"]["judge_overall_1_4"] == 0.5
+    assert rows["r1_decision_perfact"]["est_cost_usd"] == 0.0
+    assert rows["r1_decision_pairwise"]["judge_overall_1_4"] is None
+
+
+def test_only_keeps_the_full_round_file_and_rejects_unknown_cells():
+    r = _matrix("--round", "1", "--report", "--only", "r1_decision_pairwise")
+    assert r.returncode == 0, r.stderr
+    data = json.loads((_runs() / "matrix_round1_results.json").read_text())
+    assert {row["cell"] for row in data["rows"]} == {"r1_decision_perfact", "r1_decision_pairwise"}
+    r = _matrix("--round", "1", "--report", "--only", "r1_typo")
+    assert r.returncode != 0 and "r1_typo" in r.stderr
 
 
 def test_live_smoke_fake_engine(live: bool, tmp_path: Path):
@@ -115,12 +143,7 @@ def test_live_smoke_fake_engine(live: bool, tmp_path: Path):
         env={**os.environ, "GRAFEO_MEMORY_BENCH_HOME": str(tmp_path)},
     )
     assert r.returncode == 0, r.stderr[-3000:]
-    summary = (
-        Path(os.environ.get("GRAFEO_MEMORY_BENCH_HOME", str(REPO / ".benchmarks")))
-        / "locomo_runs"
-        / "gate_smoke"
-        / "summary.json"
-    )
+    summary = tmp_path / "locomo_runs" / "gate_smoke" / "summary.json"  # the subprocess's bench home
     assert summary.exists()
     s = json.loads(summary.read_text())
     assert "evidence_recall" in s and "f1" in s
