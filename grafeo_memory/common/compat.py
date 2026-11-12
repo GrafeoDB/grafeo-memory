@@ -7,9 +7,9 @@ import atexit
 import contextlib
 import sys
 import warnings
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, cast
 
 # --- Windows ProactorEventLoop safety net ---
 # Python 3.13+ incremental GC can trigger httpx transport __del__ after the
@@ -25,11 +25,12 @@ if sys.platform == "win32":
     try:
         from asyncio.proactor_events import _ProactorBasePipeTransport
 
-        _original_del = _ProactorBasePipeTransport.__del__
+        # typed loosely: CPython passes the bound warner positionally (see above)
+        _original_del = cast("Callable[..., None]", _ProactorBasePipeTransport.__del__)
 
         def _safe_del(self, _warn=warnings.warn) -> None:
             with contextlib.suppress(Exception):
-                _original_del(self, _warn)  # ty: ignore[too-many-positional-arguments]
+                _original_del(self, _warn)
 
         _ProactorBasePipeTransport.__del__ = _safe_del
     except (ImportError, AttributeError):
