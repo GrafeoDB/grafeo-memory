@@ -15,6 +15,7 @@ from grafeo_memory.common.types import (
     CompileConfig,
     Engine,
     GrowthConfig,
+    InstanceScopeConfig,
     MemoryAction,
     OntologyConfig,
     PipelineConfig,
@@ -429,6 +430,22 @@ class TestOntologyAndRetrieval:
         )
         self._speaker_graph(m, n_memories)
         assert retrieval.hubs(m, "u") == expected
+
+    def test_hub_is_no_instance_scope(self):
+        from grafeo_memory.services import scoping
+
+        m = MemoryManager(
+            QueueModel([]).model(),
+            MemoryConfig(
+                user_id="u",
+                embedding_dimensions=4,
+                taxonomy=TaxonomyConfig(enabled=True, instance_scopes=InstanceScopeConfig(prominence_threshold=2)),
+            ),
+            embedder=VecEmbedder(),
+        )
+        self._speaker_graph(m, 25)
+        ss = scoping.route(m, "u", "what does alice do at acme", ["Alice", "Acme"])
+        assert "Acme" in ss.instance_scopes and "Alice" not in ss.instance_scopes
 
     def test_hub_share_is_validated(self):
         with pytest.raises(ValueError, match="hub_share"):

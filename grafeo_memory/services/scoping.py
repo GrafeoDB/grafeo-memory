@@ -210,7 +210,11 @@ def route(
     for name in active:
         if normalize_key(name) in qkeys and name not in ss.instance_scopes:
             ss.instance_scopes.append(name)
-    ss.instance_scopes = ss.instance_scopes[: tax.config.max_scopes_per_query]
+    # A hub (a speaker on nearly every memory) scopes nothing: it would admit every memory in filter mode.
+    from grafeo_memory.services.retrieval import hubs
+
+    hub_names = hubs(m, uid)
+    ss.instance_scopes = [n for n in ss.instance_scopes if n not in hub_names][: tax.config.max_scopes_per_query]
     if ss.subject_paths == ["general"]:
         ss.subject_paths = []  # general alone = no subject routing
     return ss

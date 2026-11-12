@@ -308,7 +308,7 @@ def cells_for_round(round_id: int) -> list[dict]:
             ),
             cell("r19_compile_tax", extra_flags=[*k100, "--compile", "--taxonomy"]),
         ]
-    if round_id == 20:  # Layer D retrieval at k=20, where order decides what the answer sees; hub damping on/off
+    if round_id == 20:  # read-path knobs at k=20, where ranking decides what the answer sees (r20_vector is the base)
         k20 = ["--k", "20"]
         det = "retrieval.order=deterministic"
         return [
@@ -324,6 +324,8 @@ def cells_for_round(round_id: int) -> list[dict]:
                 for b in ("0.1", "0.5", "1.0")
             ],
             cell("r20_allen", extra_flags=k20 + sets("retrieval.temporal_filter=true")),
+            cell("r20_tax_soft", extra_flags=[*k20, "--taxonomy"]),
+            cell("r20_tax_filter", extra_flags=[*k20, "--taxonomy", *sets("taxonomy.mode=filter")]),
         ]
     raise ValueError(f"unknown round {round_id}")
 
