@@ -6,7 +6,7 @@ The harnesses live in the package at `grafeo_memory/bench/` (installed with the
 | Harness | Benchmark | Command |
 |---|---|---|
 | `grafeo_memory.bench.locomo_eval` | LOCOMO (10 conversations) | `python -m grafeo_memory.bench.locomo_eval all --run <name> --convs all` |
-| `grafeo_memory.bench.matrix` | LOCOMO config matrix, rounds 0 to 13 | `python -m grafeo_memory.bench.matrix --round 4 --convs all --extra '--workers 16'` |
+| `grafeo_memory.bench.matrix` | LOCOMO config matrix, rounds 0 to 20 | `python -m grafeo_memory.bench.matrix --round 4 --convs all --extra '--workers 16'` |
 | `grafeo_memory.bench.lme_eval` | LongMemEval (500 questions) | `python -m grafeo_memory.bench.lme_eval all --run lme_r0 --cache-path .benchmarks/lme_runs/llm_cache.jsonl` |
 | `grafeo_memory.bench.beam_eval` | BEAM 100K (20 conversations) | `python -m grafeo_memory.bench.beam_eval all --run beam_r0` |
 
@@ -16,7 +16,8 @@ twice, so reruns, retries and config cells replay from the cache at no cost.
 Useful flags: `--decision-model jev|fake`, `--memories-engine llm|decision|hybrid`,
 `--relations-engine`, `--search-engine`, `--granularity per_fact|pairwise`,
 `--escalation confidence|prob_gap|combined`, `--conf-threshold`, `--workers N`, `--cache-path`, and the layer
-toggles `--temporal-precheck`, `--ontology`, `--bitemporal`, `--compile`. `locomo_eval` also takes
+toggles `--temporal-precheck`, `--ontology`, `--bitemporal`, `--compile`, `--taxonomy`, `--policy`, `--bucket`, plus
+`--set KEY=VALUE` for any `MemoryConfig` field by dotted path (`--set retrieval.order=deterministic`). `locomo_eval` also takes
 `--judge f1|llm` and `--limit` (smoke subsets); `matrix` takes `--dry-run`, `--report`, `--only <cells>`.
 
 ## Paths and isolation
@@ -44,6 +45,22 @@ toggles `--temporal-precheck`, `--ontology`, `--bitemporal`, `--compile`. `locom
 
 Results aggregate into `<bench_home>/locomo_runs/matrix_round<N>_results.json`;
 `--report` re-aggregates without rerunning.
+
+## 0.3.0 against 0.2.2
+
+LOCOMO conversations 0 to 2 (385 questions, categories 1 to 4), Mistral Small 4 for extraction, answers and judge,
+the same answer and judge prompts and `k=100`; each version ingests with its own pipeline and the same extraction
+instructions.
+
+| Version | Judge score |
+| --- | --- |
+| 0.2.2 (grafeo 0.5.44) | 0.8727 |
+| 0.3.0, default pipeline | 0.9013 |
+
+On all 10 conversations (1,540 questions) 0.3.0's default pipeline scores 0.8753. 0.2.2's locked `mistralai` 1.12.1
+is refused by the Mistral API (401), so it ran with mistralai 3.7 and pydantic-ai 2.66. Its search returns a
+session id on 17% of results; with the sessions filled in from its database it scores 0.8701, so the gap is not
+the missing dates. Three conversations are a small sample: gaps under about 10 questions are noise.
 
 ## Results so far
 

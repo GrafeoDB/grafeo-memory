@@ -2,7 +2,7 @@
 
 All notable changes to grafeo-memory, an embedded AI memory layer on GrafeoDB.
 
-## [0.3.0] - Unreleased
+## [0.3.0] - 2026-11-12
 
 Engine and architecture release: grafeo-memory runs on grafeo 0.6.2, its modules move into layers, and each reconciliation stage can run on the LLM, a decision model, or both. Before upgrading: the first open of a grafeo 0.5 database migrates it one way (the old copy stays as `<path>.pre-0.6`), every `db_path` is a single file, and pre-0.3 module paths still import but warn until 0.7. Every new toggle and layer is off by default, which keeps the 0.2 pipeline; the release also carries 0.2.3, which never shipped on its own.
 
@@ -24,7 +24,7 @@ Engine and architecture release: grafeo-memory runs on grafeo 0.6.2, its modules
 - **Certification and compile**: `certify(memory_id)` marks a memory certified; `compile()` also returns merge proposals (cosine 0.85 to 0.92, open decisions when the bucket is on), and runs every `compilation.every_n_adds` adds when set.
 - **MCP tools** `memory_open_decisions`, `memory_resolve_decision`, `memory_manage_roots`, `memory_assemble` and `memory_add_instruction`.
 - **Store schema version**: a store that uses a layer records `schema_version` 2 and runs pending migrations on open; a store that never turns a layer on is left unchanged.
-- **Benchmark overrides**: the harnesses take `--set KEY=VALUE` for any `MemoryConfig` field by dotted path (`--set bucket.floor=0.4`), and `matrix` has rounds 14 to 19, one per layer.
+- **Benchmark overrides**: the harnesses take `--set KEY=VALUE` for any `MemoryConfig` field by dotted path (`--set bucket.floor=0.4`), and `matrix` has rounds 14 to 19, one per layer, and round 20 with the read-path knobs at `k=20`.
 - **LLM call cache** (`MemoryConfig.cache`, `True` or `CacheConfig`): LLM, embedding and decision-model calls are answered from an in-memory LRU and, for a file database, from `<db_path>.llmcache.jsonl`, so an identical call reaches the provider once. Off by default; `cached_model()`, `cached_embedder()` and `MemoryCache` wrap a model or embedder directly, and `MemoryCache.clear()` removes the entries and the file.
 - **Settings from the environment**: `GrafeoMemorySettings` reads `GRAFEO_MEMORY_*` variables and `.env` for the CLI and MCP server (model, database, user, cache, engine limits, decision model), and provider keys as secrets that are never logged. An empty variable counts as unset. The CLI and MCP server log to stderr at `GRAFEO_MEMORY_LOG_LEVEL` (default `WARNING`) with secret values redacted; `grafeo_memory.common.install_redaction()` adds the same filter to an application's handlers.
 - **Transient LLM errors are retried**: timeouts, connection errors, 429 and 5xx from the LLM provider are retried with exponential backoff (`MemoryConfig.llm_retries`, default 3; `0` disables). A dropped connection used to fail the step silently, so entity extraction stored a fact without its entities.
@@ -35,7 +35,7 @@ Engine and architecture release: grafeo-memory runs on grafeo 0.6.2, its modules
 - **Python 3.15**: CI tests Python 3.12 to 3.15, and the package lists them in its classifiers.
 - **Upgrade tests** (`tests/test_services/test_upgrade_from_05.py`): databases written on grafeo 0.5.44 by grafeo-memory 0.2.2 and 0.2.3, as a `.grafeo` file and as a WAL directory, open through the manager, the CLI and the MCP server, migrate once and keep every memory, embedding, history entry, entity, relation, graph metric and community. Vector search finds every memory and later writes persist.
 - **Engine contract tests for grafeo 0.6**: floats stay floats, `hybrid_search(filters=...)` filters before ranking, non-finite vectors are refused, a path without extension is one file, an empty directory is refused, `detach_delete_node()` exists, and the 0.6.2 type rules hold (a string never equals a number, wrong-kind operands raise, procedure arguments are validated, lists with a null compare as unknown).
-- Tests: 641 to 1066, with a regression test for each fix and end-to-end tests per layer.
+- Tests: 641 to 1071, with a regression test for each fix and end-to-end tests per layer.
 
 ### Changed
 
@@ -49,6 +49,7 @@ Upgrade notes first: what breaks or behaves differently from 0.2.x.
 - **Numbers keep their type**: scores, similarities, importance and PageRank and betweenness values stay `float`, and timestamps `int`. grafeo 0.6 reads a GQL literal such as `0.5` as an exact decimal, so grafeo-memory writes such values only as parameters or through the direct API.
 - **Deletes use `db.detach_delete_node()`** when the engine has it (grafeo 0.6.0), and a `DETACH DELETE` query otherwise.
 - **Checked and kept on grafeo 0.6**: embeddings are converted to floats (a list of ints is still stored as a plain list and left out of vector search), and history stays in `:History` nodes (change data capture is still off by default and kept in memory only).
+- **More LOCOMO questions answered**: on conversations 0 to 2 (385 questions, Mistral Small 4 for extraction, answers and judge, `k=100`) the default pipeline scores 0.9013 against 0.8727 for 0.2.2 under the same prompts. On all 10 conversations it scores 0.8753 (`docs/benchmarks.md`).
 - **README**: new sections on decision engines and pipeline toggles (including what leaves the device), the call cache and the module layout; Persistence and "Upgrading Grafeo (0.5 to 0.6)" describe what grafeo 0.6 does with files, directories and 0.5 databases.
 - **CI**: the type check installs the optional extras, so optional imports resolve; coverage leaves out the benchmark harnesses (they need datasets and API keys). `actions/checkout@v7`, `astral-sh/setup-uv@v10.3.0` (setup-uv no longer publishes major tags), `actions/upload-artifact@v7`, `actions/download-artifact@v8`, `codecov/codecov-action@v7`; `ty check` runs with the configured excludes.
 
