@@ -2,10 +2,11 @@
 
 `grafeo-memory` is a layered package (flat layout, deriva-style). Layers may
 only import layers below them, and the DAG is **enforced, not documented**:
-each layer directory ships a `ruff.toml` whose `banned-api` table fails lint
-on absolute imports of higher layers, and `tests/test_common/test_architecture.py`
-resolves relative imports via the AST and applies the same ban tables (read
-from the `ruff.toml` files, the single source of truth). Both run in CI.
+each layer directory ships a `ruff.toml` whose `banned-api` table (rule
+`TID251`, selected in `pyproject.toml`) fails lint on imports of higher layers,
+and `tests/test_common/test_architecture.py` applies the same ban tables (read
+from the `ruff.toml` files, the single source of truth) to every module via the
+AST, checking each file against its nearest `ruff.toml` as ruff does. Both run in CI.
 
 ```
 entry points (import everything)     cli/  mcp/  agent_framework.py
@@ -15,7 +16,7 @@ bench/                               harnesses; only loaded explicitly via
 services/                            facades: memory.py = MemoryManager / AsyncMemoryManager
 ─────────────────────────────────────────────────────────────────────────────
 core/                                business logic (modules): extraction/ reconciliation/
-                                     search/ ontology/ + taxonomy.py temporal.py prompts.py …
+                                     search/ ontology/ policy/ + taxonomy.py bucket.py tiers.py temporal.py prompts.py …
                                      (peer bans between subpackages in their own ruff.toml)
 ─────────────────────────────────────────────────────────────────────────────
 providers/                           adapters for external services, import common only:
@@ -42,8 +43,9 @@ D the ontological and temporal core, E compilation, F the policy cascade, G open
 | `grafeo_memory/providers/llm/` | adapter | model registry, retry policy |
 | `grafeo_memory/providers/decision/` | adapter (Layer C) | decision-model protocol/registry/packs + jev, fake |
 | `grafeo_memory/providers/embedding/` | adapter | embedders |
-| `grafeo_memory/core/` | modules | extraction/, reconciliation/, search/, ontology/, taxonomy.py, temporal.py, prompts.py, schemas helpers, scoring, reranker, history, communities, vision, _graph, _tracing |
+| `grafeo_memory/core/` | modules | extraction/, reconciliation/, search/, ontology/, policy/ (Layer F rule packs and shapes), taxonomy.py, bucket.py (Layer G questions), tiers.py (Layer A budgets and triggers), temporal.py, prompts.py, schemas helpers, scoring, reranker, history, communities, vision, _graph, _tracing |
 | `grafeo_memory/services/memory.py` | facade | `MemoryManager` / `AsyncMemoryManager` wiring all layers |
+| `grafeo_memory/services/` (layer services) | wiring | `bucket.py` (G: park, resolve, expire), `policy.py` (F: rules in the write path, rung counts), `scoping.py` (B: tags, routing, growth, roots), `retrieval.py` (D/E/A read-path knobs), `tiers.py` (A: window, `assemble()`, `end_session()`), `compile.py` (E), `schema.py` (store schema version) |
 | `grafeo_memory/cli/` | entry | CLI (`grafeo-memory = grafeo_memory.cli:main`) |
 | `grafeo_memory/mcp/` | entry | MCP server |
 | `grafeo_memory/bench/` | harnesses | locomo_eval, lme_eval, beam_eval, matrix, common; data/runs under `GRAFEO_MEMORY_BENCH_HOME` (default `.benchmarks/`) |

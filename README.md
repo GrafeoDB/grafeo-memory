@@ -21,7 +21,7 @@ uv add grafeo-memory                   # base (bring your own LLM + embedder)
 uv add grafeo-memory[mistral]          # + Mistral embeddings
 uv add grafeo-memory[openai]           # + OpenAI embeddings
 uv add grafeo-memory[anthropic]        # + Anthropic models
-uv add grafeo-memory[mcp]              # + MCP server for AI agents
+uv add grafeo-memory[mcp,openai]       # + MCP server for AI agents (with the provider extra of its model)
 uv add grafeo-memory[jev]              # + TypeSafe Jev decision model (hosted, opt-in)
 uv add grafeo-memory[agent-framework]  # + Microsoft Agent Framework vector store
 uv add grafeo-memory[bench]            # + LOCOMO / LongMemEval / BEAM harnesses
@@ -310,11 +310,43 @@ All `PipelineConfig` toggles default to off, which is the 0.2 pipeline:
 | `ontology` | Deterministic entity normalization and relation-type checks before graph writes |
 | `bitemporal`, `episodes` | Same as `MemoryConfig.enable_bitemporal` / `enable_episodes` |
 | `compile` | Read by the benchmark harnesses only; applications call `memory.compile()` |
-| `taxonomy`, `policy`, `bucket` | Reserved for later layers: a warning at startup, no effect |
+| `taxonomy`, `policy`, `bucket` | Switch on the scoping, policy and open-decisions layers below (same as their `enabled` flags) |
 
 `memory.compile()` (also `await amemory.acompile()`) is an offline pass to run after write batches: entities of the
 same type and scope whose names embed nearly identically (cosine >= 0.92) merge into the older node, which keeps
-their edges, and relations that break the controlled vocabulary are reported. It makes no LLM call.
+their edges, and relations that break the controlled vocabulary are reported. With the layers below on, it also
+proposes near-merges, grows the subject taxonomy, applies retention and re-judges open decisions.
+
+### Memory layers
+
+Each layer has its own config object on `MemoryConfig`, and every one is off by default.
+
+| Config | What it adds |
+| --- | --- |
+| `bucket` (`BucketConfig`) | A decision-model answer below `floor` is parked, not forced: the fact is kept as `provisional` and an open decision records the question. `list_open_decisions()` and `resolve_open_decision(id, answer)` let a person answer; a later write that touches the evidence, or `compile()`, re-judges it (`resolve_engine`); stale entries expire to an explicit unknown. |
+| `policy` (`PolicyConfig`) | Rule packs that decide before any model: `compliance` (credentials and card numbers are never stored), `temporal` (the pre-check), `entrenchment` (certified and user-stated memories are not overwritten by inferred decisions), `lifecycle` (re-stated facts certify a memory, retention TTLs). Relation domain/range checks run as shapes with a severity per shape. `stats().layers` reports which rung decided (rule, decision model, LLM) and the deterministic share. |
+| `taxonomy` (`TaxonomyConfig`) | Subject scopes: ten designed roots (career, health, ...) tag every new memory by keyword; prominent entities act as instance scopes. Searches route to the scopes a query names and boost (`mode="soft"`) or keep only (`"filter"`) those memories; `hard_roots` wall a root off. `search(subjects=..., scopes=...)` and `add(scopes=...)` pin scopes; `scopes()` and `set_root_scheme()` show and edit the tree; `compile()` grows generated children. |
+| `retrieval` (`RetrievalConfig`) | `order="deterministic"`: memories of the entities a query names (and their relation neighbours) are boosted and pulled in before vector ranking. `temporal_filter`: a query that names a time favors memories whose interval overlaps it. `certified_boost` ranks certified memories higher. |
+| `ontology` (`OntologyConfig`) | Write-time embedding match of new entity names (`write_embedding_rung`), one question to the decision model for the ambiguous rest (`rung4`), and UPDATE closing the old fact's interval at the new fact's start (`interval_closing`). |
+| `compilation` (`CompileConfig`) | Merge and proposal thresholds, automatic compile every N adds, and the observations that certify a memory. |
+| `tiers` (`TiersConfig`) | `working`: a per-session window and rolling summary; `assemble(query, session_id, budget)` returns a `ContextBlock` (session, instructions, facts, events, each line with its provenance) and `end_session()` promotes the session. `procedural`: `add_instruction()` stores certified instructions, `auto_triggers` picks up "always ...", "no, use ..." turns, and procedural memories rank higher. `episodic`: recency-weighted ranking. |
+
+```python
+from grafeo_memory import BucketConfig, MemoryConfig, PolicyConfig, RetrievalConfig, TaxonomyConfig
+
+config = MemoryConfig(
+    decision_model="jev",
+    bucket=BucketConfig(enabled=True, floor=0.5),
+    policy=PolicyConfig(enabled=True),
+    taxonomy=TaxonomyConfig(enabled=True, mode="soft"),
+    retrieval=RetrievalConfig(order="deterministic"),
+)
+```
+
+The rules, the scoping and the retrieval order run locally. Re-judging an open decision sends its question and
+evidence to the LLM (or to the decision model with `resolve_engine="decision"`); `rung4` and
+`taxonomy.router_engine="decision"` send entity names or fact text to the decision model. The benchmark harnesses
+set any of these fields with `--set`, for example `--set bucket.enabled=true --set bucket.floor=0.4`.
 
 ### LLM call cache
 
@@ -328,8 +360,12 @@ delete it together with the database, or call `MemoryCache.clear()`.
 grafeo-memory includes a built-in MCP server so AI agents (Claude Desktop, Cursor, etc.) can use it as a tool.
 
 ```bash
-uv add grafeo-memory[mcp]
+uv add grafeo-memory[mcp,openai]    # default model openai:gpt-4o-mini
+uv add grafeo-memory[mcp,mistral]   # GRAFEO_MEMORY_MODEL=mistral:...
 ```
+
+The server needs the provider extra of its model too: OpenAI embeddings by default, Mistral embeddings for a
+`mistral:` model.
 
 ### Claude Desktop
 
@@ -362,6 +398,11 @@ Add to `claude_desktop_config.json`:
 | `memory_list` | List all stored memories |
 | `memory_summarize` | Consolidate old memories into topic-grouped summaries |
 | `memory_history` | Show change history for a memory |
+| `memory_open_decisions` | List questions the memory parked because it was unsure |
+| `memory_resolve_decision` | Answer a parked question |
+| `memory_manage_roots` | Show or edit the subject roots that scope memories |
+| `memory_assemble` | Build a prompt-ready context block with provenance |
+| `memory_add_instruction` | Store a standing instruction, certified |
 
 ### Environment Variables
 
@@ -489,7 +530,7 @@ grafeo-memory is part of the GrafeoDB ecosystem:
 - **[grafeo-langchain](https://github.com/GrafeoDB/grafeo-langchain)**: LangChain integration
 - **[grafeo-llamaindex](https://github.com/GrafeoDB/grafeo-llamaindex)**: LlamaIndex integration
 - **[grafeo-mcp](https://github.com/GrafeoDB/grafeo-mcp)**: MCP server for raw GrafeoDB access
-- **grafeo-memory-mcp** (built-in): MCP server for the memory API (`uv add grafeo-memory[mcp]`)
+- **grafeo-memory-mcp** (built-in): MCP server for the memory API (`uv add grafeo-memory[mcp,openai]`)
 
 All packages share the same database file. Build memories with grafeo-memory, query them with grafeo-langchain, expose them via MCP.
 
