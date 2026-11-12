@@ -316,6 +316,13 @@ def cells_for_round(round_id: int) -> list[dict]:
             cell("r20_det_d1_nohub", extra_flags=k20 + sets(det, "retrieval.hub_share=1.0")),
             cell("r20_det_d0", extra_flags=k20 + sets(det, "retrieval.expansion_depth=0")),
             cell("r20_det_d1", extra_flags=k20 + sets(det)),
+            *[
+                cell(
+                    f"r20_det_d0_b{b}",
+                    extra_flags=k20 + sets(det, "retrieval.expansion_depth=0", f"retrieval.deterministic_boost={b}"),
+                )
+                for b in ("0.1", "0.5", "1.0")
+            ],
             cell("r20_allen", extra_flags=k20 + sets("retrieval.temporal_filter=true")),
         ]
     raise ValueError(f"unknown round {round_id}")
