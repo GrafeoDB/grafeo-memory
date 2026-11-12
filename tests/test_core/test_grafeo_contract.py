@@ -587,7 +587,10 @@ class Test062TypeRules:
         db2 = grafeo.GrafeoDB(history_retention="forever")
         try:
             db2.execute("INSERT (:P)")
-            point = db2.epoch_as_of(datetime.datetime.now(datetime.UTC))
+            assert callable(db2.epoch_as_of)
+            # read at the engine's own epoch: a wall-clock "now" taken right after creation can fall a
+            # millisecond before the retention start on Windows (two clocks), which grafeo refuses
+            point = db2.current_epoch()
             rows = list(db2.execute_as_of("MATCH (n) RETURN count(n) AS c", point))
             assert rows == [{"c": 1}]
         finally:
