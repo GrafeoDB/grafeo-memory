@@ -216,6 +216,19 @@ class TestPersistenceDurability:
         b = MemoryCache(_cfg(persist_path=path, max_entries=2), persist_path=path)
         assert b.get("chat", "m", {"q": 4}) == {"a": 4}
 
+    def test_reload_keeps_newest_when_the_clock_does_not_tick(self, tmp_path, monkeypatch):
+        # Windows: back-to-back writes can share one time.time() value
+        import grafeo_memory.common.cache as cache_mod
+
+        monkeypatch.setattr(cache_mod.time, "time", lambda: 1_000_000.0)
+        path = str(tmp_path / "c.jsonl")
+        a = MemoryCache(_cfg(persist_path=path, max_storage_bytes=250), persist_path=path)
+        for i in range(5):
+            a.put("chat", "m", {"q": i}, {"a": i})
+        a.close()
+        b = MemoryCache(_cfg(persist_path=path, max_entries=2), persist_path=path)
+        assert b.get("chat", "m", {"q": 4}) == {"a": 4}
+
     def test_two_writers_on_one_file_keep_both(self, tmp_path):
         path = str(tmp_path / "c.jsonl")
         a = MemoryCache(_cfg(persist_path=path), persist_path=path)

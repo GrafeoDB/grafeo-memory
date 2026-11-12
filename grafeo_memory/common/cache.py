@@ -208,6 +208,7 @@ class MemoryCache:
         self._misses = 0
         self._evictions = 0
         self._per_kind: dict[str, dict[str, int]] = {}
+        self._last_ts = 0.0
         if self._persist_path:
             self._load()
 
@@ -243,20 +244,21 @@ class MemoryCache:
     def put(self, kind: str, model: str, request: Any, value: Any) -> None:
         key = make_key(kind, model, request)
         val = _value_json(value)
-        line = _value_json(  # request already stripped; the value keeps its volatile keys
-            {
-                "key": key,
-                "kind": kind,
-                "model": str(model),
-                "request": _to_jsonable(request),
-                "value": _value_jsonable(value),
-                "ts": time.time(),
-            }
-        )
+        record = {  # request already stripped; the value keeps its volatile keys
+            "key": key,
+            "kind": kind,
+            "model": str(model),
+            "request": _to_jsonable(request),
+            "value": _value_jsonable(value),
+        }
         with self._lock:
+            # strictly increasing per instance: reload and compaction rank entries by ts, and
+            # time.time() repeats within a clock tick on Windows, which made "newest" arbitrary
+            ts = self._last_ts = max(time.time(), self._last_ts + 1e-6)
+            line = _value_json({**record, "ts": ts})
             if key in self._entries:
                 self._remove_locked(key)
-            self._entries[key] = (time.time(), val)
+            self._entries[key] = (ts, val)
             self._bytes += len(key) + len(val)
             self._evict_locked()
             if self._persist_path:
@@ -361,6 +363,7 @@ class MemoryCache:
         del ordered
         for key, ts, val in reversed(keep):
             self._entries[key] = (ts, val)
+            self._last_ts = max(self._last_ts, ts)
         self._bytes += nbytes
         logger.debug("cache: loaded %d entries from %s", len(keep), path)
 
