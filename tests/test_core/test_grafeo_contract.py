@@ -12,8 +12,6 @@ they may change between engine releases (for example "GRAFEO-X001").
 
 from __future__ import annotations
 
-import datetime
-
 import grafeo
 import pytest
 
