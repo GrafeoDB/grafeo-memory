@@ -11,7 +11,7 @@ No servers, no Docker, no Neo4j, no Qdrant. One `.grafeo` file + one LLM.
 
 ```
 Typical memory stack: Containers with Neo4j + Qdrant, Embedding API + LLM
-grafeo-memory stack:  grafeo (single file) + LLM
+grafeo-memory stack:  grafeo (single file) + LLM (and optional decision model)
 ```
 
 ## Install
