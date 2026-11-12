@@ -1,9 +1,113 @@
 # Changelog
 
-All notable changes to grafeo-memory are documented in this file.
+All notable changes to grafeo-memory, an embedded AI memory layer on GrafeoDB.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.3.0] - 2026-11-12
+
+Engine and architecture release: grafeo-memory runs on grafeo 0.6.2, its modules move into layers, and each reconciliation stage can run on the LLM, a decision model, or both. Before upgrading: the first open of a grafeo 0.5 database migrates it one way (the old copy stays as `<path>.pre-0.6`), every `db_path` is a single file, and pre-0.3 module paths still import but warn until 0.7. Every new toggle and layer is off by default, which keeps the 0.2 pipeline; the release also carries 0.2.3, which never shipped on its own.
+
+### Added
+
+- **Decision engines per pipeline stage**: `MemoryConfig.pipeline` (`PipelineConfig`, `StageConfig`) runs the `memories`, `relations` and `search` stages on `Engine.LLM` (default), `Engine.DECISION` or `Engine.HYBRID`, with the model named by `MemoryConfig.decision_model` (`"jev"`, `"fake"` or an entry point in `grafeo_memory.decision_models`). `HYBRID` asks the decision model first and sends the facts (for relations, the KEEP/DELETE verdicts) below `confidence_threshold` to one LLM call; the extraction stages stay on the LLM, and another engine there raises `ValueError`.
+- **Jev decision model** (extra `jev`): `JevDecisionModel` calls TypeSafe's hosted System One API with `TYPESAFE_API_KEY`. It sends the reconciliation state (new facts and their candidate memories) to TypeSafe; the default pipeline sends nothing there.
+- **Decision-model protocol**: `DecisionModel`, `CategoricalQuestion`, `ScoreQuestion`, `Decision`, `register_decision_model()`, `get_decision_model()` and the offline `FakeDecisionModel` are exported, with per-fact and pairwise question packs (`Granularity`) and three escalation signals (`EscalationSignal`).
+- **Temporal pre-check** (`PipelineConfig.temporal_precheck`): a new fact whose validity interval overlaps no candidate memory is added without a model call, and the other facts reconcile against their overlapping candidates only. Only stated validity counts ("since 2019" has no end, "until 2022", "2020-2022", "in 2024", "on 7 May 2023", ISO dates); a fact without one, or a bare number such as "2048 followers", always reaches the engine.
+- **Ontology normalization** (`PipelineConfig.ontology`): before graph writes, extracted entity names resolve to existing entities of the same type by exact label or alias (relations follow the rename), and a relation of a controlled type whose endpoint types break its domain or range is not written. Types match case-insensitively (`person`, `works at`). Free-text relation types and unknown entity types pass unchanged.
+- **`compile()`** on `MemoryManager` and `AsyncMemoryManager` (also `acompile()`): an offline pass that merges entities of the same type and `graph_name` scope whose names embed at cosine 0.92 or more into the older node, moving their edges with their properties and keeping the merged name in `merged_from` (so `ontology` resolves it later), and reports relations that break the controlled vocabulary. It makes no LLM call, and the manager never runs it on its own.
+- **Layer toggles on `PipelineConfig`**: `bitemporal` and `episodes` mirror `MemoryConfig.enable_bitemporal` and `enable_episodes`, `compile` is read by the benchmark harnesses, and `taxonomy`, `policy` and `bucket` switch on the layers below.
+- **Open-decisions bucket** (`MemoryConfig.bucket`, `BucketConfig`): a decision-model answer below `floor` (default 0.5) is parked instead of applied or escalated. The fact is stored with `provisional=True`, the contested memory stays, and `list_open_decisions()` / `resolve_open_decision(id, answer)` let a person settle it; a later write touching the evidence, or `compile()`, re-judges it, and entries past `ttl_days` or beyond `max_open` expire to `unknown`.
+- **Policy rule packs** (`MemoryConfig.policy`, `PolicyConfig`): `compliance` keeps credentials and card, IBAN and SSN numbers out of the store, `temporal` turns on the pre-check, `entrenchment` stops inferred decisions from overwriting certified or user-stated memories, and `lifecycle` certifies a memory after `compilation.promote_after` re-statements and applies `retention_days`. Each event carries the rung that decided it (`MemoryEvent.rung`), and `stats().layers` reports rule hits and the deterministic share.
+- **Subject and instance scopes** (`MemoryConfig.taxonomy`, `TaxonomyConfig`): new memories get subject tags from ten designed roots, entities linked to enough memories become scopes, and searches boost (`mode="soft"`) or keep only (`"filter"`) the memories in the scopes a query routes to. `search(subjects=, scopes=)` and `add(scopes=)` pin scopes, `hard_roots` wall a root off, `scopes()` and `set_root_scheme()` show and edit the roots (retiring one never deletes memories), and `compile()` grows generated children.
+- **Retrieval knobs** (`MemoryConfig.retrieval`, `RetrievalConfig`): `order="deterministic"` boosts and pulls in the memories of the entities a query names and their relation neighbours (`expansion_depth`), skipping hub entities such as conversation speakers that sit on more than `hub_share` of the memories, `temporal_filter` favors memories whose stated interval overlaps the query's, and `certified_boost` ranks certified memories higher.
+- **Ontology knobs** (`MemoryConfig.ontology`, `OntologyConfig`): write-time embedding match of entity names, one decision-model question for the ambiguous rest (`rung4`), and `interval_closing`, which ends a superseded fact's validity at the new fact's stated start.
+- **Working, procedural and episodic tiers** (`MemoryConfig.tiers`, `TiersConfig`): `assemble(query, session_id, budget)` returns a `ContextBlock` with the session window, instructions, facts and events within a token budget, each line with its provenance; `end_session()` promotes a session (with `defer_extraction`, `add()` only buffers and extraction runs once per session); `add_instruction()` stores certified procedural memories and `auto_triggers` picks up instruction turns.
+- **Certification and compile**: `certify(memory_id)` marks a memory certified; `compile()` also returns merge proposals (cosine 0.85 to 0.92, open decisions when the bucket is on), and runs every `compilation.every_n_adds` adds when set.
+- **MCP tools** `memory_open_decisions`, `memory_resolve_decision`, `memory_manage_roots`, `memory_assemble` and `memory_add_instruction`.
+- **Store schema version**: a store that uses a layer records `schema_version` 2 and runs pending migrations on open; a store that never turns a layer on is left unchanged.
+- **Benchmark overrides**: the harnesses take `--set KEY=VALUE` for any `MemoryConfig` field by dotted path (`--set bucket.floor=0.4`), and `matrix` has rounds 14 to 19, one per layer, and round 20 with the read-path knobs at `k=20`.
+- **LLM call cache** (`MemoryConfig.cache`, `True` or `CacheConfig`): LLM, embedding and decision-model calls are answered from an in-memory LRU and, for a file database, from `<db_path>.llmcache.jsonl`, so an identical call reaches the provider once. Off by default; `cached_model()`, `cached_embedder()` and `MemoryCache` wrap a model or embedder directly, and `MemoryCache.clear()` removes the entries and the file.
+- **Settings from the environment**: `GrafeoMemorySettings` reads `GRAFEO_MEMORY_*` variables and `.env` for the CLI and MCP server (model, database, user, cache, engine limits, decision model), and provider keys as secrets that are never logged. An empty variable counts as unset. The CLI and MCP server log to stderr at `GRAFEO_MEMORY_LOG_LEVEL` (default `WARNING`) with secret values redacted; `grafeo_memory.common.install_redaction()` adds the same filter to an application's handlers.
+- **Transient LLM errors are retried**: timeouts, connection errors, 429 and 5xx from the LLM provider are retried with exponential backoff (`MemoryConfig.llm_retries`, default 3; `0` disables). A dropped connection used to fail the step silently, so entity extraction stored a fact without its entities.
+- **Engine memory limits**: `MemoryConfig.db_memory_limit_bytes` and `db_spill_limit_bytes` (`GRAFEO_MEMORY_DB_MEMORY_LIMIT_MB`, `GRAFEO_MEMORY_DB_SPILL_LIMIT_MB`) are passed to grafeo when the manager opens its database.
+- **Time travel** (grafeo 0.6.2 history retention): `MemoryConfig.history_retention` (`"off"`, `"forever"`, a `timedelta` or seconds) is passed when the manager opens its database, and a database file keeps it. `as_of(point)`, `execute_as_of(query, point, params)` and `get_memory_as_of(memory_id, point)` on both managers read the database, a query or a memory as it was at an epoch, an aware datetime or a `timedelta` ago (`None` when the memory did not exist yet).
+- **Microsoft Agent Framework** (extra `agent-framework`): `grafeo_memory.agent_framework.GrafeoVectorStore` adapts a manager's database to the framework's `BaseVectorStore`, so its collection CRUD, search and agent tools (`create_upsert_tool`, `create_vector_search_tool`) store and find memories in grafeo. `eq` filters become grafeo's exact-match `filters=`; other operators raise `NotImplementedError`.
+- **Benchmark harnesses** (extra `bench`): `python -m grafeo_memory.bench.locomo_eval`, `lme_eval`, `beam_eval` and `matrix` run LOCOMO, LongMemEval and BEAM with every engine and toggle as a flag and a shared call cache. See `docs/benchmarks.md`.
+- **Python 3.15**: CI tests Python 3.12 to 3.15, and the package lists them in its classifiers.
+- **Upgrade tests** (`tests/test_services/test_upgrade_from_05.py`): databases written on grafeo 0.5.44 by grafeo-memory 0.2.2 and 0.2.3, as a `.grafeo` file and as a WAL directory, open through the manager, the CLI and the MCP server, migrate once and keep every memory, embedding, history entry, entity, relation, graph metric and community. Vector search finds every memory and later writes persist.
+- **Engine contract tests for grafeo 0.6**: floats stay floats, `hybrid_search(filters=...)` filters before ranking, non-finite vectors are refused, a path without extension is one file, an empty directory is refused, `detach_delete_node()` exists, and the 0.6.2 type rules hold (a string never equals a number, wrong-kind operands raise, procedure arguments are validated, lists with a null compare as unknown).
+- Tests: 641 to 1071, with a regression test for each fix and end-to-end tests per layer.
+
+### Changed
+
+Upgrade notes first: what breaks or behaves differently from 0.2.x.
+
+- **The first open of a grafeo 0.5 database migrates it**: a `MemoryManager`, the CLI or the MCP server converts it at the same path and keeps the old file or WAL directory, unchanged, as `<path>.pre-0.6`; grafeo 0.5 cannot open the result. Stop every process that uses the database first and keep the `.pre-0.6` copy until going back is ruled out (README, "Upgrading Grafeo (0.5 to 0.6)"); for grafeo 0.5, stay on grafeo-memory 0.2.x.
+- **Every `db_path` is a database file**: a path without the `.grafeo` extension no longer creates a WAL directory, and opening a directory that is not a grafeo 0.5 database (an empty one included) raises `GrafeoError`. Point `db_path`, `--db` or `GRAFEO_MEMORY_DB` at a file such as `./memories/memory.grafeo`.
+- **Embeddings with NaN or infinite values raise `ValueError`** before anything is written: grafeo 0.5 stored such a vector and vector search never found it, grafeo 0.6 refuses it. Check the embedder if `add()`, `update()` or `search()` raises "the embedder must return finite floats".
+- **Modules live in layers**: the source moved from `src/grafeo_memory/` to `grafeo_memory/` with `common/`, `providers/`, `core/`, `services/` and the entry points `cli/`, `mcp/` and `agent_framework.py`; lint and a test enforce the import order. `from grafeo_memory import ...` is unchanged (see Deprecated for the old module paths).
+- **Relation reconciliation sees at most 50 candidates**: the existing relations shown to the LLM are those sharing an entity with a new relation (only those can conflict), ranked same source and relation type first, then same target and type or the same two entities, then the rest, newest first within a rank. 0.2.x showed every relation of the user, a prompt that grew without bound.
+- **Numbers keep their type**: scores, similarities, importance and PageRank and betweenness values stay `float`, and timestamps `int`. grafeo 0.6 reads a GQL literal such as `0.5` as an exact decimal, so grafeo-memory writes such values only as parameters or through the direct API.
+- **Deletes use `db.detach_delete_node()`** when the engine has it (grafeo 0.6.0), and a `DETACH DELETE` query otherwise.
+- **Checked and kept on grafeo 0.6**: embeddings are converted to floats (a list of ints is still stored as a plain list and left out of vector search), and history stays in `:History` nodes (change data capture is still off by default and kept in memory only).
+- **More LOCOMO questions answered**: on conversations 0 to 2 (385 questions, Mistral Small 4 for extraction, answers and judge, `k=100`) the default pipeline scores 0.9013 against 0.8727 for 0.2.2 under the same prompts. On all 10 conversations it scores 0.8753 (`docs/benchmarks.md`).
+- **README**: new sections on decision engines and pipeline toggles (including what leaves the device), the call cache and the module layout; Persistence and "Upgrading Grafeo (0.5 to 0.6)" describe what grafeo 0.6 does with files, directories and 0.5 databases.
+- **CI**: the type check installs the optional extras, so optional imports resolve; coverage leaves out the benchmark harnesses (they need datasets and API keys). `actions/checkout@v7`, `astral-sh/setup-uv@v10.3.0` (setup-uv no longer publishes major tags), `actions/upload-artifact@v7`, `actions/download-artifact@v8`, `codecov/codecov-action@v7`; `ty check` runs with the configured excludes.
+
+### Deprecated
+
+- **Pre-0.3 module paths**: `grafeo_memory.manager`, `.types`, `.schemas`, `.embedding`, `.history`, `.messages`, `.prompts`, `.protocol`, `.reranker`, `.scoring`, `.vision`, `.communities`, `.temporal`, `.extraction.*`, `.reconciliation.*`, `.search.*`, `._compat`, `._graph` and `._tracing` resolve to the modules at their new homes and raise `DeprecationWarning` naming the new path. They are removed in 0.7.
+
+### Fixed
+
+- **Searches in a shared database could miss a user's memories**: the default hybrid search let the engine pick the best `k` memories of all users and filtered by `user_id`, `agent_id`, `run_id`, `graph_name` and `filters` afterwards, so other users' memories could take every slot. The scope filters now go to grafeo 0.6's `hybrid_search(filters=...)`, which filters before it ranks.
+- **A refused embedding left a memory without one**: the memory node was created before its embedding was checked and set, so a wrong-sized or non-finite embedding left a memory that vector search never finds, and `update()` changed the text before re-embedding it. The embedding is now checked before anything is written.
+- **Mistral embeddings with mistralai 2 and later**: the CLI and the MCP server imported `from mistralai import Mistral`, which mistralai 2 moved to `mistralai.client`, and exited with "mistralai package not installed". `grafeo_memory.providers.embedding.mistral_client_class()` finds the client in either layout; the README and examples import it from `mistralai.client`.
+- **Type of `search()`**: overloads on `grouped` give `SearchResponse` (and `dict[str, list[SearchResult]]` with `grouped=True`) instead of a union, so type checkers accept iterating the results.
+
+### Dependencies
+
+- **grafeo 0.6.2** (`grafeo>=0.6.2,<0.7`; 0.2.3 required `>=0.5.44,<0.6`).
+- **pydantic-ai-slim 1.96 or later** (`>=1.96`, was unversioned): grafeo-memory reads `AgentRunResult.usage` as a property, which 1.96 introduced and pydantic-ai 2 requires. pydantic-ai 2 is supported; the lock has 2.66.
+- **pydantic-settings and python-dotenv** are new runtime dependencies (`pydantic-settings>=2.6`, `python-dotenv>=1.0`), for the settings above.
+- **mcp 2** for the `mcp` extra (`mcp>=2.2,<3`; was `>=1.26,<2`): the server uses the mcp 2.x API (`mcp.server.mcpserver.MCPServer`, `Context[AppContext, ServerSession]`).
+- **mistralai 2 or later** for the `mistral`, `bench` and `all` extras (`mistralai>=2`): pydantic-ai's Mistral support already required 3.1, so 1.x never resolved; the client is imported from `mistralai.client`.
+- **New extras**: `jev` (`httpx>=0.27`), `agent-framework` (`agent-framework-core>=1.25,<2`) and `bench` (`mistralai`, `nltk`, `numpy`, `pyarrow`).
+- **Lockfile**: openai 3.49, anthropic 2.7, mistralai 3.7, google-genai 3.0, groq 1.7; development tools pytest 9.2, ruff 0.17 and ty 0.0.100 (its renamed rules `import-not-found` and `missing-attribute` are used in `pyproject.toml`).
+
+## [0.2.3] - Unreleased (ships in 0.3.0)
+
+Works with grafeo 0.5.44: deletes work again, memory history is stored durably, and an engine contract suite runs weekly against the newest grafeo.
+
+### Added
+
+- **Engine contract tests** (`tests/test_core/test_grafeo_contract.py`, 37 tests): every grafeo behavior grafeo-memory relies on (direct API calls and their errors, query shapes and result format, `DETACH DELETE`, vector, text, hybrid and MMR search, PageRank, betweenness and Louvain output, single-file and directory persistence, CDC defaults). A failure names the behavior that changed and the code that depends on it.
+- **Weekly engine compatibility workflow** (`.github/workflows/engine-compat.yml`, also manual): runs the contract tests and the full suite on Linux and Windows against the newest grafeo the requirement accepts and the newest grafeo on PyPI, pre-releases included.
+- Tests for delete cascades through every edge type, history on every write path and across close and reopen (single-file and WAL-directory databases), shared databases with and without CDC, the async manager, the MCP tools and server lifespan against a real manager, and the CLI against a database file; regression tests for each fix above (540 to 641 tests).
+
+### Changed
+
+- **History storage**: `:History` nodes carry `memory_id`, `event`, `timestamp` (epoch ms), the texts, `actor_id`, `role`, `user_id` and `graph_name`, and have no edges, so they do not change graph algorithm scores. `record_history()` always writes and returns the node id; new `record_history_batch()` (used by `add_batch(infer=False)`) and `adopt_legacy_history()`. `get_history()` gains a `graph_name` filter, still reads the `HAS_HISTORY` entries of grafeo-memory 0.1.x, and raises database errors instead of returning an empty list. Engine CDC is not used, and the CDC setting of a database passed in with `db=` is left alone.
+- `history()` is scoped to the manager's `graph_name`.
+- `delete()` records a DELETE history entry; `summarize()` records it through the same path.
+- `update()` raises `ValueError` when `memory_id` is not a memory of the manager (it used to return an UPDATE event and change nothing). The MCP `memory_update` tool returns the error, the CLI exits with status 1.
+- `memory_id` joins the property indexes created at startup.
+- README, docstrings and `.env.example` use single-file `.grafeo` database paths; README has new Persistence (including upgrading to grafeo 0.6) and Memory History sections.
+- Development dependencies moved from the deprecated `[tool.uv] dev-dependencies` to `[dependency-groups]`.
+
+### Fixed
+
+- **Deletes failed on grafeo 0.5.44**: the engine now refuses to delete a node that still has edges, and memories almost always have some (`HAS_ENTITY`, `LEADS_TO`, `SUPERSEDES`, `DERIVED_FROM`, `PRODUCED`). `delete()`, `delete_all()` and `summarize()` raised `GrafeoError`, and dissolved communities were silently kept. Nodes are now removed with `DETACH DELETE` (new helper `_graph.detach_delete_node()`); entities, relations and episodes stay.
+- **`history()` was always empty on grafeo 0.5.32 and later**: history was read from engine change data capture, which became opt-in in 0.5.32 and is kept in memory only (lost on close, pruned by retention, with hybrid logical clock timestamps instead of epoch milliseconds), while `record_history()` wrote nothing whenever the engine had CDC. grafeo-memory now stores every change as a `:History` node in the same database (see Changed). History survives closing and reopening the database and a hard delete of the memory.
+- **Search results lost fields**: the vector/graph merge, `enable_topology_boost`, `enable_importance`, the cross-session boost and `LLMReranker` rebuilt `SearchResult` by hand and dropped `created_at`, `session_id`, `valid_at`, `invalid_at`, `learned_at` (and the reranker also `memory_type`). Results found by both vector and graph search then failed `time_after`/`time_before`, ignored `point_in_time`, sorted wrongly for temporal queries, and `grouped=True` put them under `"default"`.
+- **Embeddings that were not float lists were never found**: the engine indexes a property as a vector only when every element is a float, so an embedder returning ints stored memories that vector search skipped. Embeddings are now converted to floats before they are stored or searched.
+- **Reconciliation acted on any node id the LLM returned**: an UPDATE or DELETE whose `target_memory_id` was not one of the candidates shown to the LLM (hallucinated, injected, another user's memory or a foreign node in a shared database) expired that node. Such decisions now lose their target: UPDATE becomes ADD and DELETE is skipped, with a warning.
+- **`delete()`, `update()` and `set_importance()` accepted any node id**: in a shared database they could delete or change foreign nodes, or memories of another `graph_name`. They now act only on `:Memory` nodes in the manager's scope.
+- **`delete_all()` left expired memories behind**: memories superseded by reconciliation (and their text) stayed in the database. They are now deleted too.
+- **Session and episode chains forked within one millisecond**: `LEADS_TO` and `NEXT_EPISODE` picked the previous node by `created_at` alone, so quick successive adds all linked to the same node. Ties are now broken by node id.
+
+### Dependencies
+
+- **grafeo 0.5.44** (`grafeo>=0.5.44,<0.6`; was `>=0.5.27`): grafeo 0.5.44 changed the direct-write API (writes to missing nodes and deletes of connected nodes raise). The upper bound keeps this release off grafeo 0.6 and its one-way file migration; grafeo-memory 0.3.0 moves to grafeo 0.6, see the [versioning policy](https://grafeo.dev/versioning/).
 
 ## [0.2.2] - 2026-04-08
 
@@ -275,7 +379,13 @@ Initial release.
 - **Windows async compatibility**: persistent `asyncio.Runner` and `ProactorEventLoop` safety net for Python 3.13+
 - 230 tests, 83% coverage
 
-[Unreleased]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.2.1...HEAD
+---
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+[0.3.0]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.2.2...v0.3.0
+[0.2.2]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/GrafeoDB/grafeo-memory/compare/v0.1.4...v0.1.5

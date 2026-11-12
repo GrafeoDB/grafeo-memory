@@ -1,0 +1,11 @@
+# BENCH imports services/core/providers/common, never the entry points.
+extend = "../../pyproject.toml"
+
+[lint.flake8-tidy-imports.banned-api]
+"grafeo_memory.cli" = { msg = "Architecture violation: bench is loaded BY the cli, never imports it" }
+"grafeo_memory.mcp" = { msg = "Architecture violation: bench is loaded BY the cli, never imports mcp" }
+"grafeo_memory.agent_framework" = { msg = "Architecture violation: bench cannot import the agent_framework adapter" }
+
+# Harness scripts: prompt strings and load_env()-before-imports are intentional.
+[lint.per-file-ignores]
+"*.py" = ["E501", "E402", "SIM115", "F841", "B905", "B023", "SIM401", "SIM105"]

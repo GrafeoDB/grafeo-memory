@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from mistralai import Mistral  # noqa: E402
+from mistralai.client import Mistral  # noqa: E402
 
 from grafeo_memory import MemoryConfig, MemoryManager, MistralEmbedder  # noqa: E402
 

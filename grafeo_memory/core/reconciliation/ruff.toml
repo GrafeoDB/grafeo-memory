@@ -1,0 +1,11 @@
+# CORE/reconciliation peer boundary: extends core's rules; the ban table below replaces the
+# inherited one, so it repeats core's bans plus this package's peer bans.
+extend = "../ruff.toml"
+
+[lint.flake8-tidy-imports.banned-api]
+"grafeo_memory.services" = { msg = "Architecture violation: core cannot import services" }
+"grafeo_memory.cli" = { msg = "Architecture violation: cli is a top-level entry point" }
+"grafeo_memory.mcp" = { msg = "Architecture violation: mcp is a top-level entry point" }
+"grafeo_memory.bench" = { msg = "Architecture violation: only the CLI loads grafeo_memory.bench" }
+"grafeo_memory.agent_framework" = { msg = "Architecture violation: agent_framework is a top-level entry point" }
+"grafeo_memory.core.search" = { msg = "Architecture violation: reconciliation cannot import search" }

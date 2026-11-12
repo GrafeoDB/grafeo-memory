@@ -32,8 +32,33 @@ venv/
 # ── Testing & coverage ───────────────────────────────────────────────
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 *.log
 
 # ── Database files (don't commit user data) ──────────────────────────
 *.db
+
+
+# benchmark run data and LLM caches (large, regenerable)
+.benchmarks/beam_runs/
+.benchmarks/beam_data/
+.benchmarks/lme_runs/
+.benchmarks/lme_data/
+.benchmarks/locomo_runs/
+.benchmarks/locomo_data/
+*.llmcache.jsonl
+*.grafeo
+*.grafeo.wal/
+# left by the 0.6 upgrade (full copies of the old database) and by queries that spill to disk
+*.grafeo.pre-0.6
+*.grafeo.pre-0.6.wal/
+*.db.pre-0.6/
+*.grafeo.spill/
+
+# Claude Code project context (internal)
+.claude/
+
+# grafeo 0.5 databases the upgrade tests open (tests/fixtures/grafeo_0_5/make_fixtures.py); after *.grafeo so they win
+!tests/fixtures/grafeo_0_5/*/memory_wal/wal/*.log
+!tests/fixtures/grafeo_0_5/*/memory.grafeo

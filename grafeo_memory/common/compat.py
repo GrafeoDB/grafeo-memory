@@ -1,0 +1,86 @@
+"""Async/sync compatibility utilities."""
+
+from __future__ import annotations
+
+import asyncio
+import atexit
+import contextlib
+import sys
+import warnings
+from collections.abc import Callable, Coroutine
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, cast
+
+# --- Windows ProactorEventLoop safety net ---
+# Python 3.13+ incremental GC can trigger httpx transport __del__ after the
+# event loop is closed, raising RuntimeError on Windows. This monkey-patch
+# silences the spurious error in transport teardown.
+#
+# CPython's _ProactorBasePipeTransport.__del__ has signature
+# `def __del__(self, _warn=warnings.warn)`, `_warn` is bound at module-load
+# time so __del__ keeps a working warner even after interpreter teardown.
+# Our wrapper must preserve that contract: defaulting `_warn=None` causes
+# `TypeError: 'NoneType' object is not callable` deep inside __del__.
+if sys.platform == "win32":
+    try:
+        from asyncio.proactor_events import _ProactorBasePipeTransport
+
+        # typed loosely: CPython passes the bound warner positionally (see above)
+        _original_del = cast("Callable[..., None]", _ProactorBasePipeTransport.__del__)
+
+        def _safe_del(self, _warn=warnings.warn) -> None:
+            with contextlib.suppress(Exception):
+                _original_del(self, _warn)
+
+        _ProactorBasePipeTransport.__del__ = _safe_del
+    except (ImportError, AttributeError):
+        pass
+
+# --- Persistent asyncio.Runner (Python 3.12+) ---
+# Keeps the event loop alive across multiple run_sync() calls and across
+# multiple MemoryManager sessions. Closing the runner between sessions
+# corrupts httpx/anyio global state on Windows, so we keep it alive for the
+# process lifetime and clean up via atexit.
+_runner: asyncio.Runner | None = None
+
+
+def _get_runner() -> asyncio.Runner:
+    global _runner
+    if _runner is None:
+        _runner = asyncio.Runner()
+    return _runner
+
+
+def run_sync[T](coro: Coroutine[Any, Any, T]) -> T:
+    """Run an async coroutine synchronously.
+
+    If no event loop is running, uses a persistent asyncio.Runner to keep the
+    loop alive across calls (avoids Windows ProactorEventLoop teardown issues).
+    If called from within an existing event loop, runs the coroutine
+    in a separate thread to avoid deadlock.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return _get_runner().run(coro)
+
+    # Already in an event loop, run in a thread to avoid blocking
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(lambda: asyncio.Runner().run(coro)).result()
+
+
+def shutdown() -> None:
+    """Close the persistent event loop runner.
+
+    Called automatically at process exit via atexit. Should NOT be called
+    when closing individual MemoryManager sessions, the runner is shared
+    across sessions to avoid corrupting httpx/anyio transport state.
+    """
+    global _runner
+    if _runner is not None:
+        with contextlib.suppress(Exception):
+            _runner.close()
+        _runner = None
+
+
+atexit.register(shutdown)

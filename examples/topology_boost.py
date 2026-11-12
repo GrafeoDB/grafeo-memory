@@ -1,8 +1,8 @@
-"""Topology boost — promote well-connected memories in search results.
+"""Topology boost, promote well-connected memories in search results.
 
 When enabled, memories that share entities with many other memories
 get a score boost during search. This is a lightweight, structural
-re-ranking step — no extra LLM call required.
+re-ranking step, no extra LLM call required.
 
 For example, "Alice works at Google" connects to both "Alice" and
 "Google" entities, which may link to other memories. This makes it
@@ -39,7 +39,7 @@ def main():
         memory.add("Alice has a dog named Max")
         memory.add("Alice enjoys hiking on weekends")
 
-        # Search — well-connected work memories should rank higher
+        # Search, well-connected work memories should rank higher
         print("Search: 'What does Alice do?'")
         print("(topology boost promotes memories with more entity connections)\n")
         results = memory.search("What does Alice do?")

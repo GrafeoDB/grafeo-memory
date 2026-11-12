@@ -1,4 +1,4 @@
-"""Importance scoring — multi-factor search ranking.
+"""Importance scoring, multi-factor search ranking.
 
 When enabled, search results are ranked by a composite score:
   w_sim * similarity + w_rec * recency + w_freq * frequency + w_imp * importance
@@ -44,7 +44,7 @@ def main():
         for m in memory.get_all():
             print(f"  [{m.memory_id}] (imp={m.importance}) {m.text}")
 
-        # --- Search — importance affects ranking ---
+        # --- Search, importance affects ranking ---
         print("\nSearch results (importance-weighted):")
         results = memory.search("Alice travel information")
         for r in results:

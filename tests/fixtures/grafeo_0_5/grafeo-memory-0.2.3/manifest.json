@@ -1,0 +1,739 @@
+{
+  "databases": {
+    "memory.grafeo": {
+      "communities": [
+        {
+          "members": [
+            "alix",
+            "hiking"
+          ],
+          "name": "Alix and friends",
+          "summary": "Alix, Gus and the places they go."
+        },
+        {
+          "members": [
+            "chess",
+            "gus",
+            "utrecht"
+          ],
+          "name": "Alix and friends",
+          "summary": "Alix, Gus and the places they go."
+        },
+        {
+          "members": [
+            "acme",
+            "amsterdam"
+          ],
+          "name": "Alix and friends",
+          "summary": "Alix, Gus and the places they go."
+        }
+      ],
+      "deleted": "16",
+      "entities": [
+        "acme",
+        "alix",
+        "amsterdam",
+        "chess",
+        "gus",
+        "hiking",
+        "utrecht"
+      ],
+      "entity_graph_props": {
+        "11": {
+          "betweenness": 0.0,
+          "community_id": 4,
+          "pagerank": 0.06699784698480828
+        },
+        "12": {
+          "betweenness": 0.0,
+          "community_id": 4,
+          "pagerank": 0.06699784698480828
+        },
+        "2": {
+          "betweenness": 0.023715415019762844,
+          "community_id": 2,
+          "pagerank": 0.049098333919686675
+        },
+        "3": {
+          "betweenness": 0.007905138339920948,
+          "community_id": 0,
+          "pagerank": 0.05413006133457299
+        },
+        "4": {
+          "betweenness": 0.0,
+          "community_id": 0,
+          "pagerank": 0.08622927435709338
+        },
+        "7": {
+          "betweenness": 0.023715415019762844,
+          "community_id": 4,
+          "pagerank": 0.06300956676406595
+        },
+        "8": {
+          "betweenness": 0.0,
+          "community_id": 2,
+          "pagerank": 0.05413006133457299
+        }
+      },
+      "history": {
+        "0": [
+          {
+            "event": "ADD",
+            "new_text": "alix works at acme in amsterdam",
+            "old_text": null,
+            "timestamp": 1792533243249
+          }
+        ],
+        "13": [
+          {
+            "event": "ADD",
+            "new_text": "alix drinks black tea",
+            "old_text": null,
+            "timestamp": 1792533243314
+          },
+          {
+            "event": "UPDATE",
+            "new_text": "alix drinks green tea",
+            "old_text": "alix drinks black tea",
+            "timestamp": 1792533243314
+          }
+        ],
+        "16": [
+          {
+            "event": "ADD",
+            "new_text": "alix owns a red bicycle",
+            "old_text": null,
+            "timestamp": 1792533243314
+          },
+          {
+            "event": "DELETE",
+            "new_text": null,
+            "old_text": "alix owns a red bicycle",
+            "timestamp": 1792533243316
+          }
+        ],
+        "19": [
+          {
+            "event": "ADD",
+            "new_text": "alix speaks dutch and english",
+            "old_text": null,
+            "timestamp": 1792533243316
+          }
+        ],
+        "21": [
+          {
+            "event": "ADD",
+            "new_text": "gus has a cat named Vincent",
+            "old_text": null,
+            "timestamp": 1792533243316
+          }
+        ],
+        "23": [
+          {
+            "event": "ADD",
+            "new_text": "alix grew up in leiden",
+            "old_text": null,
+            "timestamp": 1600000000000
+          }
+        ],
+        "5": [
+          {
+            "event": "ADD",
+            "new_text": "alix goes hiking with gus",
+            "old_text": null,
+            "timestamp": 1792533243295
+          }
+        ],
+        "9": [
+          {
+            "event": "ADD",
+            "new_text": "gus plays chess in utrecht",
+            "old_text": null,
+            "timestamp": 1792533243307
+          }
+        ]
+      },
+      "label_counts": {
+        "Community": 3,
+        "Entity": 7,
+        "Episode": 0,
+        "History": 10,
+        "Memory": 7
+      },
+      "legacy": "23",
+      "memories": {
+        "0": {
+          "created_at": 1792533243249,
+          "embedding": [
+            -0.4065198004245758,
+            5.440802851808257e-06,
+            -4.97522613385204e-11,
+            2.508968484321619e-34,
+            0.4085991680622101,
+            -0.4085991680622101,
+            2.8226563371293216e-23,
+            1.7134121599899562e-36,
+            -9.914979427760873e-12,
+            -2.6856265909447454e-22,
+            -0.4085991680622101,
+            0.40856873989105225,
+            -3.014330508163879e-31,
+            0.000313676631776616,
+            -0.4085991680622101,
+            -6.280208017577298e-19
+          ],
+          "importance": 1.0,
+          "text": "alix works at acme in amsterdam",
+          "user_id": "alix"
+        },
+        "13": {
+          "created_at": 1792533243314,
+          "embedding": [
+            1.712337365233907e-07,
+            4.894586930987041e-36,
+            0.4082481265068054,
+            0.4082481265068054,
+            -0.0008614377584308386,
+            4.379739237947433e-09,
+            -0.4082481265068054,
+            -1.6063880781125306e-10,
+            -0.4082481265068054,
+            8.759311498351963e-09,
+            -0.4082481265068054,
+            -2.5612210919831457e-13,
+            -7.388295706407882e-39,
+            -0.4082481265068054,
+            1.1886884365708283e-08,
+            4.747108960145852e-06
+          ],
+          "importance": 1.0,
+          "text": "alix drinks green tea",
+          "user_id": "alix"
+        },
+        "19": {
+          "created_at": 1792533243316,
+          "embedding": [
+            3.446620322134544e-35,
+            -0.4078979194164276,
+            -0.4078979194164276,
+            0.04142088443040848,
+            -3.6617203713618096e-10,
+            6.473284242963849e-39,
+            -2.212071365351969e-31,
+            -0.4078979194164276,
+            -5.7611658499379104e-11,
+            3.132247600263226e-29,
+            0.4078979194164276,
+            0.4078979194164276,
+            -4.998050667762314e-18,
+            0.4078979194164276,
+            5.192929248284957e-36,
+            -1.403542805083677e-15
+          ],
+          "importance": 0.75,
+          "text": "alix speaks dutch and english",
+          "user_id": "alix"
+        },
+        "21": {
+          "created_at": 1792533243316,
+          "embedding": [
+            -0.333346962928772,
+            0.33322736620903015,
+            -0.333346962928772,
+            -0.333346962928772,
+            0.333346962928772,
+            0.333346962928772,
+            0.33334362506866455,
+            -3.3871171042717905e-28,
+            -0.333346962928772,
+            4.3492233577670214e-23,
+            -0.00025685111177153885,
+            -0.333346962928772,
+            3.2129223462512915e-14,
+            0.000261863402556628,
+            4.355879723983413e-34,
+            -8.497774258980004e-22
+          ],
+          "importance": 1.0,
+          "text": "gus has a cat named Vincent",
+          "user_id": "gus"
+        },
+        "23": {
+          "created_at": 1600000000000,
+          "embedding": [
+            -5.177055420004487e-30,
+            -0.4023447036743164,
+            -5.28960634049899e-35,
+            3.712824167682029e-18,
+            -0.4094187617301941,
+            0.4094187617301941,
+            -0.0002992793160956353,
+            -4.558966010791546e-24,
+            -1.3523743328461119e-27,
+            1.7304141586649102e-26,
+            4.556905634084396e-12,
+            -0.4094187617301941,
+            -1.8283085180977035e-32,
+            0.4094187617301941,
+            -0.4094187617301941,
+            -1.6383758155153908e-26
+          ],
+          "importance": null,
+          "text": "alix grew up in leiden",
+          "user_id": "alix"
+        },
+        "5": {
+          "created_at": 1792533243295,
+          "embedding": [
+            1.6227744481511763e-06,
+            -0.31117141246795654,
+            -4.1660196967822157e-38,
+            0.3121662437915802,
+            -0.3121662437915802,
+            0.16170363128185272,
+            -0.3121662437915802,
+            0.3121662437915802,
+            -0.3121662437915802,
+            -1.232488949371398e-27,
+            -0.3121573030948639,
+            -0.3121662437915802,
+            -3.276797429644859e-28,
+            0.3121662437915802,
+            0.3121661841869354,
+            9.067765626295034e-33
+          ],
+          "importance": 1.0,
+          "text": "alix goes hiking with gus",
+          "user_id": "alix"
+        },
+        "9": {
+          "created_at": 1792533243307,
+          "embedding": [
+            -0.37796446681022644,
+            0.37796446681022644,
+            -0.37796446681022644,
+            -0.37796446681022644,
+            -4.697484712323785e-07,
+            7.294239133060279e-14,
+            1.6458908311362447e-24,
+            0.37796446681022644,
+            -1.9547399304253245e-27,
+            -2.702895517809039e-14,
+            -2.2883259389280743e-24,
+            -0.37796446681022644,
+            1.082208764833122e-31,
+            0.37796446681022644,
+            -1.982672093002201e-25,
+            4.3236613833479154e-13
+          ],
+          "importance": 1.0,
+          "text": "gus plays chess in utrecht",
+          "user_id": "alix"
+        }
+      },
+      "relations": [
+        [
+          "acme",
+          "located_in",
+          "amsterdam"
+        ],
+        [
+          "alix",
+          "enjoys",
+          "hiking"
+        ],
+        [
+          "alix",
+          "friend_of",
+          "gus"
+        ],
+        [
+          "alix",
+          "works_at",
+          "acme"
+        ],
+        [
+          "gus",
+          "lives_in",
+          "utrecht"
+        ],
+        [
+          "gus",
+          "plays",
+          "chess"
+        ]
+      ],
+      "updated": "13"
+    },
+    "memory_wal": {
+      "communities": [
+        {
+          "members": [
+            "acme",
+            "amsterdam"
+          ],
+          "name": "Alix and friends",
+          "summary": "Alix, Gus and the places they go."
+        },
+        {
+          "members": [
+            "alix",
+            "hiking"
+          ],
+          "name": "Alix and friends",
+          "summary": "Alix, Gus and the places they go."
+        },
+        {
+          "members": [
+            "chess",
+            "gus",
+            "utrecht"
+          ],
+          "name": "Alix and friends",
+          "summary": "Alix, Gus and the places they go."
+        }
+      ],
+      "deleted": "16",
+      "entities": [
+        "acme",
+        "alix",
+        "amsterdam",
+        "chess",
+        "gus",
+        "hiking",
+        "utrecht"
+      ],
+      "entity_graph_props": {
+        "11": {
+          "betweenness": 0.0,
+          "community_id": 4,
+          "pagerank": 0.06699784698480828
+        },
+        "12": {
+          "betweenness": 0.0,
+          "community_id": 4,
+          "pagerank": 0.06699784698480828
+        },
+        "2": {
+          "betweenness": 0.023715415019762844,
+          "community_id": 2,
+          "pagerank": 0.049098333919686675
+        },
+        "3": {
+          "betweenness": 0.007905138339920948,
+          "community_id": 0,
+          "pagerank": 0.05413006133457299
+        },
+        "4": {
+          "betweenness": 0.0,
+          "community_id": 0,
+          "pagerank": 0.08622927435709338
+        },
+        "7": {
+          "betweenness": 0.023715415019762844,
+          "community_id": 4,
+          "pagerank": 0.06300956676406595
+        },
+        "8": {
+          "betweenness": 0.0,
+          "community_id": 2,
+          "pagerank": 0.05413006133457299
+        }
+      },
+      "history": {
+        "0": [
+          {
+            "event": "ADD",
+            "new_text": "alix works at acme in amsterdam",
+            "old_text": null,
+            "timestamp": 1792533243375
+          }
+        ],
+        "13": [
+          {
+            "event": "ADD",
+            "new_text": "alix drinks black tea",
+            "old_text": null,
+            "timestamp": 1792533243400
+          },
+          {
+            "event": "UPDATE",
+            "new_text": "alix drinks green tea",
+            "old_text": "alix drinks black tea",
+            "timestamp": 1792533243400
+          }
+        ],
+        "16": [
+          {
+            "event": "ADD",
+            "new_text": "alix owns a red bicycle",
+            "old_text": null,
+            "timestamp": 1792533243400
+          },
+          {
+            "event": "DELETE",
+            "new_text": null,
+            "old_text": "alix owns a red bicycle",
+            "timestamp": 1792533243401
+          }
+        ],
+        "19": [
+          {
+            "event": "ADD",
+            "new_text": "alix speaks dutch and english",
+            "old_text": null,
+            "timestamp": 1792533243401
+          }
+        ],
+        "21": [
+          {
+            "event": "ADD",
+            "new_text": "gus has a cat named Vincent",
+            "old_text": null,
+            "timestamp": 1792533243401
+          }
+        ],
+        "23": [
+          {
+            "event": "ADD",
+            "new_text": "alix grew up in leiden",
+            "old_text": null,
+            "timestamp": 1600000000000
+          }
+        ],
+        "5": [
+          {
+            "event": "ADD",
+            "new_text": "alix goes hiking with gus",
+            "old_text": null,
+            "timestamp": 1792533243382
+          }
+        ],
+        "9": [
+          {
+            "event": "ADD",
+            "new_text": "gus plays chess in utrecht",
+            "old_text": null,
+            "timestamp": 1792533243393
+          }
+        ]
+      },
+      "label_counts": {
+        "Community": 3,
+        "Entity": 7,
+        "Episode": 0,
+        "History": 10,
+        "Memory": 7
+      },
+      "legacy": "23",
+      "memories": {
+        "0": {
+          "created_at": 1792533243375,
+          "embedding": [
+            -0.4065198004245758,
+            5.440802851808257e-06,
+            -4.97522613385204e-11,
+            2.508968484321619e-34,
+            0.4085991680622101,
+            -0.4085991680622101,
+            2.8226563371293216e-23,
+            1.7134121599899562e-36,
+            -9.914979427760873e-12,
+            -2.6856265909447454e-22,
+            -0.4085991680622101,
+            0.40856873989105225,
+            -3.014330508163879e-31,
+            0.000313676631776616,
+            -0.4085991680622101,
+            -6.280208017577298e-19
+          ],
+          "importance": 1.0,
+          "text": "alix works at acme in amsterdam",
+          "user_id": "alix"
+        },
+        "13": {
+          "created_at": 1792533243400,
+          "embedding": [
+            1.712337365233907e-07,
+            4.894586930987041e-36,
+            0.4082481265068054,
+            0.4082481265068054,
+            -0.0008614377584308386,
+            4.379739237947433e-09,
+            -0.4082481265068054,
+            -1.6063880781125306e-10,
+            -0.4082481265068054,
+            8.759311498351963e-09,
+            -0.4082481265068054,
+            -2.5612210919831457e-13,
+            -7.388295706407882e-39,
+            -0.4082481265068054,
+            1.1886884365708283e-08,
+            4.747108960145852e-06
+          ],
+          "importance": 1.0,
+          "text": "alix drinks green tea",
+          "user_id": "alix"
+        },
+        "19": {
+          "created_at": 1792533243401,
+          "embedding": [
+            3.446620322134544e-35,
+            -0.4078979194164276,
+            -0.4078979194164276,
+            0.04142088443040848,
+            -3.6617203713618096e-10,
+            6.473284242963849e-39,
+            -2.212071365351969e-31,
+            -0.4078979194164276,
+            -5.7611658499379104e-11,
+            3.132247600263226e-29,
+            0.4078979194164276,
+            0.4078979194164276,
+            -4.998050667762314e-18,
+            0.4078979194164276,
+            5.192929248284957e-36,
+            -1.403542805083677e-15
+          ],
+          "importance": 0.75,
+          "text": "alix speaks dutch and english",
+          "user_id": "alix"
+        },
+        "21": {
+          "created_at": 1792533243401,
+          "embedding": [
+            -0.333346962928772,
+            0.33322736620903015,
+            -0.333346962928772,
+            -0.333346962928772,
+            0.333346962928772,
+            0.333346962928772,
+            0.33334362506866455,
+            -3.3871171042717905e-28,
+            -0.333346962928772,
+            4.3492233577670214e-23,
+            -0.00025685111177153885,
+            -0.333346962928772,
+            3.2129223462512915e-14,
+            0.000261863402556628,
+            4.355879723983413e-34,
+            -8.497774258980004e-22
+          ],
+          "importance": 1.0,
+          "text": "gus has a cat named Vincent",
+          "user_id": "gus"
+        },
+        "23": {
+          "created_at": 1600000000000,
+          "embedding": [
+            -5.177055420004487e-30,
+            -0.4023447036743164,
+            -5.28960634049899e-35,
+            3.712824167682029e-18,
+            -0.4094187617301941,
+            0.4094187617301941,
+            -0.0002992793160956353,
+            -4.558966010791546e-24,
+            -1.3523743328461119e-27,
+            1.7304141586649102e-26,
+            4.556905634084396e-12,
+            -0.4094187617301941,
+            -1.8283085180977035e-32,
+            0.4094187617301941,
+            -0.4094187617301941,
+            -1.6383758155153908e-26
+          ],
+          "importance": null,
+          "text": "alix grew up in leiden",
+          "user_id": "alix"
+        },
+        "5": {
+          "created_at": 1792533243382,
+          "embedding": [
+            1.6227744481511763e-06,
+            -0.31117141246795654,
+            -4.1660196967822157e-38,
+            0.3121662437915802,
+            -0.3121662437915802,
+            0.16170363128185272,
+            -0.3121662437915802,
+            0.3121662437915802,
+            -0.3121662437915802,
+            -1.232488949371398e-27,
+            -0.3121573030948639,
+            -0.3121662437915802,
+            -3.276797429644859e-28,
+            0.3121662437915802,
+            0.3121661841869354,
+            9.067765626295034e-33
+          ],
+          "importance": 1.0,
+          "text": "alix goes hiking with gus",
+          "user_id": "alix"
+        },
+        "9": {
+          "created_at": 1792533243393,
+          "embedding": [
+            -0.37796446681022644,
+            0.37796446681022644,
+            -0.37796446681022644,
+            -0.37796446681022644,
+            -4.697484712323785e-07,
+            7.294239133060279e-14,
+            1.6458908311362447e-24,
+            0.37796446681022644,
+            -1.9547399304253245e-27,
+            -2.702895517809039e-14,
+            -2.2883259389280743e-24,
+            -0.37796446681022644,
+            1.082208764833122e-31,
+            0.37796446681022644,
+            -1.982672093002201e-25,
+            4.3236613833479154e-13
+          ],
+          "importance": 1.0,
+          "text": "gus plays chess in utrecht",
+          "user_id": "alix"
+        }
+      },
+      "relations": [
+        [
+          "acme",
+          "located_in",
+          "amsterdam"
+        ],
+        [
+          "alix",
+          "enjoys",
+          "hiking"
+        ],
+        [
+          "alix",
+          "friend_of",
+          "gus"
+        ],
+        [
+          "alix",
+          "works_at",
+          "acme"
+        ],
+        [
+          "gus",
+          "lives_in",
+          "utrecht"
+        ],
+        [
+          "gus",
+          "plays",
+          "chess"
+        ]
+      ],
+      "updated": "13"
+    }
+  },
+  "dimensions": 16,
+  "written_with": {
+    "grafeo": "0.5.44",
+    "grafeo_memory": "0.2.3"
+  }
+}

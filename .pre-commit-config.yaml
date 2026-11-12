@@ -1,0 +1,47 @@
+# Pre-commit hooks for grafeo-memory
+# Install: cargo install prek && prek install
+# Run manually: prek run --all-files
+# Docs: https://github.com/j178/prek
+
+repos:
+  # Built-in prek hooks
+  - repo: builtin
+    hooks:
+      # Markdown is prose; never rewrite it mechanically
+      - id: trailing-whitespace
+        exclude: '\.md$'
+      - id: end-of-file-fixer
+        exclude: '\.md$'
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+
+  # Typo checker
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.29.4
+    hooks:
+      - id: typos
+
+  # Python hooks
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix --exit-non-zero-on-fix
+        language: system
+        types: [python]
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+
+      - id: ty-check
+        name: ty check
+        entry: uv run ty check .
+        language: system
+        pass_filenames: false
+        types: [python]
