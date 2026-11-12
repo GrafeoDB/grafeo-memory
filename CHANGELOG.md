@@ -2,6 +2,22 @@
 
 All notable changes to grafeo-memory, an embedded AI memory layer on GrafeoDB.
 
+## [0.3.1] - Unreleased
+
+Maintenance release: Python 3.13 is the minimum, and the LLM call cache keeps its newest entries when it reloads on Windows.
+
+### Changed
+
+- **CI**: tests Python 3.13 to 3.15 on Linux and Windows, and a failing job no longer cancels the others.
+
+### Removed
+
+- **Python 3.12**: grafeo-memory 0.3.1 requires Python 3.13 or later (`requires-python = ">=3.13"`). On Python 3.12, stay on 0.3.0.
+
+### Fixed
+
+- **The call cache could drop its newest entries on reload**: writes within one clock tick, common on Windows, shared a timestamp, so reloading a cache file larger than `max_entries` or `max_memory_bytes` kept an arbitrary subset instead of the newest. Each write now gets a strictly increasing timestamp; the effect was extra provider calls, never a wrong answer.
+
 ## [0.3.0] - 2026-11-12
 
 Engine and architecture release: grafeo-memory runs on grafeo 0.6.2, its modules move into layers, and each reconciliation stage can run on the LLM, a decision model, or both. Before upgrading: the first open of a grafeo 0.5 database migrates it one way (the old copy stays as `<path>.pre-0.6`), every `db_path` is a single file, and pre-0.3 module paths still import but warn until 0.7. Every new toggle and layer is off by default, which keeps the 0.2 pipeline; the release also carries 0.2.3, which never shipped on its own.
@@ -32,7 +48,7 @@ Engine and architecture release: grafeo-memory runs on grafeo 0.6.2, its modules
 - **Time travel** (grafeo 0.6.2 history retention): `MemoryConfig.history_retention` (`"off"`, `"forever"`, a `timedelta` or seconds) is passed when the manager opens its database, and a database file keeps it. `as_of(point)`, `execute_as_of(query, point, params)` and `get_memory_as_of(memory_id, point)` on both managers read the database, a query or a memory as it was at an epoch, an aware datetime or a `timedelta` ago (`None` when the memory did not exist yet).
 - **Microsoft Agent Framework** (extra `agent-framework`): `grafeo_memory.agent_framework.GrafeoVectorStore` adapts a manager's database to the framework's `BaseVectorStore`, so its collection CRUD, search and agent tools (`create_upsert_tool`, `create_vector_search_tool`) store and find memories in grafeo. `eq` filters become grafeo's exact-match `filters=`; other operators raise `NotImplementedError`.
 - **Benchmark harnesses** (extra `bench`): `python -m grafeo_memory.bench.locomo_eval`, `lme_eval`, `beam_eval` and `matrix` run LOCOMO, LongMemEval and BEAM with every engine and toggle as a flag and a shared call cache. See `docs/benchmarks.md`.
-- **Python 3.15**: CI tests Python 3.13 to 3.15, and the package lists them in its classifiers.
+- **Python 3.15**: CI tests Python 3.12 to 3.15, and the package lists them in its classifiers.
 - **Upgrade tests** (`tests/test_services/test_upgrade_from_05.py`): databases written on grafeo 0.5.44 by grafeo-memory 0.2.2 and 0.2.3, as a `.grafeo` file and as a WAL directory, open through the manager, the CLI and the MCP server, migrate once and keep every memory, embedding, history entry, entity, relation, graph metric and community. Vector search finds every memory and later writes persist.
 - **Engine contract tests for grafeo 0.6**: floats stay floats, `hybrid_search(filters=...)` filters before ranking, non-finite vectors are refused, a path without extension is one file, an empty directory is refused, `detach_delete_node()` exists, and the 0.6.2 type rules hold (a string never equals a number, wrong-kind operands raise, procedure arguments are validated, lists with a null compare as unknown).
 - Tests: 641 to 1071, with a regression test for each fix and end-to-end tests per layer.
@@ -56,10 +72,6 @@ Upgrade notes first: what breaks or behaves differently from 0.2.x.
 ### Deprecated
 
 - **Pre-0.3 module paths**: `grafeo_memory.manager`, `.types`, `.schemas`, `.embedding`, `.history`, `.messages`, `.prompts`, `.protocol`, `.reranker`, `.scoring`, `.vision`, `.communities`, `.temporal`, `.extraction.*`, `.reconciliation.*`, `.search.*`, `._compat`, `._graph` and `._tracing` resolve to the modules at their new homes and raise `DeprecationWarning` naming the new path. They are removed in 0.7.
-
-### Removed
-
-- **Python 3.12**: grafeo-memory 0.3.0 requires Python 3.13 or later (`requires-python = ">=3.13"`). On Python 3.12, stay on 0.2.x.
 
 ### Fixed
 
