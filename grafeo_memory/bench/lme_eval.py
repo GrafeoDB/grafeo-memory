@@ -107,7 +107,10 @@ async def ingest_question(args, client, item, run_dir, cache, tracker) -> dict:
         hybrid_rrf_k=args.rrf_k,
         custom_fact_prompt=BETTER_EXTRACTION_PROMPT,
         cache=CacheConfig(
-            persist_path=args.cache_path, max_memory_bytes=512 * 1024 * 1024, max_storage_bytes=4 * 1024 * 1024 * 1024
+            persist_path=args.cache_path,
+            max_entries=2_000_000,  # the byte cap bounds memory; never evict replayable calls by count
+            max_memory_bytes=512 * 1024 * 1024,
+            max_storage_bytes=4 * 1024 * 1024 * 1024,
         ),
         pipeline=build_pipeline(args),
         decision_model=getattr(args, "_dm", None),
@@ -157,7 +160,10 @@ async def qa_question(args, client, item, run_dir, ans_cache: Cache, judge_cache
         chronological_sort=False,
         hybrid_rrf_k=args.rrf_k,
         cache=CacheConfig(
-            persist_path=args.cache_path, max_memory_bytes=512 * 1024 * 1024, max_storage_bytes=4 * 1024 * 1024 * 1024
+            persist_path=args.cache_path,
+            max_entries=2_000_000,  # the byte cap bounds memory; never evict replayable calls by count
+            max_memory_bytes=512 * 1024 * 1024,
+            max_storage_bytes=4 * 1024 * 1024 * 1024,
         ),
         pipeline=build_pipeline(args),
         decision_model=getattr(args, "_dm", None),
@@ -255,7 +261,10 @@ async def run_all(args) -> None:
 
     cache = MemoryCache(
         CacheConfig(
-            persist_path=args.cache_path, max_memory_bytes=512 * 1024 * 1024, max_storage_bytes=4 * 1024 * 1024 * 1024
+            persist_path=args.cache_path,
+            max_entries=2_000_000,  # the byte cap bounds memory; never evict replayable calls by count
+            max_memory_bytes=512 * 1024 * 1024,
+            max_storage_bytes=4 * 1024 * 1024 * 1024,
         ),
         persist_path=args.cache_path,
     )

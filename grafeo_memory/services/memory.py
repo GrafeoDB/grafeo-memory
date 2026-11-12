@@ -86,7 +86,11 @@ class _MemoryCore:
         for _flag, _layer in (("taxonomy", "B"), ("policy", "F"), ("bucket", "G")):
             if getattr(self._config.pipeline, _flag, False):
                 logger.warning("pipeline.%s is on but Layer %s is not implemented yet: no-op", _flag, _layer)
-        self._model: ModelType = model
+        from grafeo_memory.providers.llm.retry import with_retries
+
+        # Transient provider errors retry inside the model, under the cache (only
+        # successful responses are cached).
+        self._model: ModelType = with_retries(model, self._config.llm_retries)
         self._embedder = embedder
         self._reranker = reranker
 
@@ -119,7 +123,7 @@ class _MemoryCore:
             if persist is None and self._config.db_path and not self._db_external:
                 persist = self._config.db_path + ".llmcache.jsonl"
             self._cache = MemoryCache(cache_cfg, persist_path=persist)
-            self._model = CachingModel(model, self._cache)
+            self._model = CachingModel(self._model, self._cache)
             self._embedder = CachingEmbedder(embedder, self._cache)
             set_instrumentation(bool(self._config.instrument))
 

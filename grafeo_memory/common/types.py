@@ -204,6 +204,9 @@ class MemoryConfig:
     weight_importance: float = 0.15
     # LLM usage tracking (opt-in)
     usage_callback: Callable[[str, RunUsage], None] | None = None
+    # Retries for transient LLM provider errors (timeouts, connection errors, 429, 5xx), with
+    # exponential backoff; 0 disables. Other errors fail at once, as before.
+    llm_retries: int = 3
     # Topology-aware scoring (opt-in, requires enable_importance)
     weight_topology: float = 0.0
     # Structural decay modulation (opt-in, requires enable_importance)
@@ -289,6 +292,8 @@ class MemoryConfig:
                 raise ValueError(f"cache.max_memory_bytes must be positive, got {self.cache.max_memory_bytes}")
             if self.cache.max_storage_bytes <= 0:
                 raise ValueError(f"cache.max_storage_bytes must be positive, got {self.cache.max_storage_bytes}")
+        if self.llm_retries < 0:
+            raise ValueError(f"llm_retries must be >= 0, got {self.llm_retries}")
         if self.db_memory_limit_bytes is not None and self.db_memory_limit_bytes <= 0:
             raise ValueError(f"db_memory_limit_bytes must be positive, got {self.db_memory_limit_bytes}")
         if self.db_spill_limit_bytes is not None and self.db_spill_limit_bytes <= 0:

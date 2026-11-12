@@ -13,7 +13,7 @@ def is_transient(exc: BaseException) -> bool:
     return any(m in repr(exc) for m in TRANSIENT_MARKERS)
 
 
-def retry_sync(fn: Callable[[], str], *, retries: int = 8, max_sleep: float = 30.0):
+def retry_sync[T](fn: Callable[[], T], *, retries: int = 8, max_sleep: float = 30.0) -> T:
     """Call fn() until it stops raising transient errors."""
     for attempt in range(retries):
         try:
@@ -26,7 +26,7 @@ def retry_sync(fn: Callable[[], str], *, retries: int = 8, max_sleep: float = 30
     raise RuntimeError("retry_sync: retries exhausted")
 
 
-async def retry_async(fn: Callable[[], Awaitable[str]], *, retries: int = 8, max_sleep: float = 30.0) -> str:
+async def retry_async[T](fn: Callable[[], Awaitable[T]], *, retries: int = 8, max_sleep: float = 30.0) -> T:
     """Await fn() until it stops raising transient errors."""
     for attempt in range(retries):
         try:
