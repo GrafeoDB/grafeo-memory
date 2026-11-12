@@ -80,6 +80,33 @@ def test_registry_resolves_fake_and_filters_kwargs():
         get_decision_model("does-not-exist")
 
 
+def test_registry_instantiates_a_class_spec():
+    dm = get_decision_model(FakeDecisionModel, api_key="secret")
+    assert isinstance(dm, FakeDecisionModel)
+
+
+def test_registry_skips_a_broken_entry_point(monkeypatch, caplog):
+    import importlib.metadata
+
+    from grafeo_memory.providers.decision import registry
+
+    class _EP:
+        def __init__(self, name, target):
+            self.name, self._target = name, target
+
+        def load(self):
+            if isinstance(self._target, Exception):
+                raise self._target
+            return self._target
+
+    eps = [_EP("broken-plugin", ImportError("missing dep")), _EP("good-plugin", FakeDecisionModel)]
+    monkeypatch.setattr(importlib.metadata, "entry_points", lambda group: eps)
+    monkeypatch.setattr(registry, "_REGISTRY", dict(registry._REGISTRY))
+    with caplog.at_level("WARNING", logger=registry.__name__):
+        assert isinstance(get_decision_model("good-plugin"), FakeDecisionModel)
+    assert "broken-plugin" in caplog.text
+
+
 # --- reconcile_async: DECISION engine -------------------------------------------
 
 
@@ -347,6 +374,19 @@ def test_relations_pack_and_mapper_directly():
     assert decisions_to_deletes(new, existing, decisions) == [{"source": "a", "target": "c", "relation_type": "knows"}]
     keep = [Decision("new_0|existing_0", "KEEP", 0.8, 0.8, runner_up=0.2)]
     assert decisions_to_deletes(new, existing, keep) == []
+
+
+def test_unrelated_confident_keep_does_not_cancel_a_contradiction():
+    new = [
+        Relation(source="a", target="b", relation_type="knows"),
+        Relation(source="x", target="y", relation_type="uses"),
+    ]
+    existing = [{"source": "a", "target": "c", "relation_type": "knows"}]
+    decisions = [
+        Decision("new_0|existing_0", "DELETE", 0.7, 0.7, runner_up=0.3),
+        Decision("new_1|existing_0", "KEEP", 0.99, 0.99, runner_up=0.01),  # unrelated new relation
+    ]
+    assert decisions_to_deletes(new, existing, decisions) == [{"source": "a", "target": "c", "relation_type": "knows"}]
 
 
 # --- manager integration -----------------------------------------------------------

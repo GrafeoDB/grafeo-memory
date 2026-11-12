@@ -30,7 +30,7 @@ openai = ["pydantic-ai-slim[openai]", "openai>=1.0"]
 anthropic = ["pydantic-ai-slim[anthropic]"]
 google = ["pydantic-ai-slim[google]"]
 groq = ["pydantic-ai-slim[groq]"]
-mistral = ["pydantic-ai-slim[mistral]", "mistralai>=1.0"]
+mistral = ["pydantic-ai-slim[mistral]", "mistralai>=2"]
 mcp = ["mcp>=2.2,<3"]
 # Microsoft Agent Framework vector-store adapter (grafeo_memory.agent_framework)
 agent-framework = ["agent-framework-core>=1.25,<2"]
@@ -38,8 +38,8 @@ agent-framework = ["agent-framework-core>=1.25,<2"]
 # API for non-LLM pipeline stages; sends reconciliation state to TypeSafe when used
 jev = ["httpx>=0.27"]
 # Benchmark harnesses (grafeo_memory.bench) - LOCOMO / LongMemEval / BEAM
-bench = ["mistralai>=1.0", "nltk>=3.9", "numpy>=2", "pyarrow>=18"]
-all = ["pydantic-ai-slim[openai,anthropic,google,groq,mistral]", "openai>=1.0", "mistralai>=1.0", "httpx>=0.27"]
+bench = ["mistralai>=2", "nltk>=3.9", "numpy>=2", "pyarrow>=18"]
+all = ["pydantic-ai-slim[openai,anthropic,google,groq,mistral]", "openai>=1.0", "mistralai>=2", "httpx>=0.27"]
 
 [project.entry-points."grafeo_memory.decision_models"]
 jev = "grafeo_memory.providers.decision.jev:JevDecisionModel"
@@ -61,8 +61,18 @@ build-backend = "hatchling.build"
 packages = ["grafeo_memory"]
 
 [tool.hatch.build.targets.sdist]
-# Internal notes and local run data never ship, whatever the local gitignore says.
-exclude = [".claude/", ".benchmarks/", "coverage.xml", "*.grafeo", "*.llmcache.jsonl"]
+# Internal notes and local run data never ship, whatever the local gitignore says; the grafeo 0.5
+# databases the upgrade tests open do ship (the negation must stay after the database patterns).
+exclude = [
+    ".claude/",
+    ".benchmarks/",
+    "coverage.xml",
+    "*.llmcache.jsonl",
+    "*.grafeo",
+    "*.grafeo.*",
+    "*.db.pre-0.6/",
+    "!tests/fixtures/grafeo_0_5/*/memory.grafeo",
+]
 
 # ── Ruff ──────────────────────────────────────────────────────────────
 [tool.ruff]
@@ -70,7 +80,7 @@ target-version = "py312"
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "TID251"]
 
 # ── Ty ────────────────────────────────────────────────────────────────
 [tool.ty.environment]

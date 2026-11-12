@@ -37,21 +37,26 @@ def vector_search(
     search_filters = {"user_id": user_id}
     if filters:
         search_filters.update(filters)
+    engine_filters, fetch_k = _engine_filters(search_filters, k)
 
     try:
-        results = db.vector_search(MEMORY_LABEL, vector_property, query_embedding, k, filters=search_filters)
+        results = db.vector_search(MEMORY_LABEL, vector_property, query_embedding, fetch_k, filters=engine_filters)
     except RuntimeError:
         logger.warning("vector_search failed for label=%s", MEMORY_LABEL, exc_info=True)
         results = []
 
     search_results: list[SearchResult] = []
     for node_id, distance in results:
+        if len(search_results) >= k:
+            break
         node = db.get_node(node_id)
         if node is None:
             continue
         props = _get_props(node)
         # Skip expired memories (soft-deleted)
         if props.get("expired_at") is not None:
+            continue
+        if engine_filters is not search_filters and not _matches_filters(props, search_filters):
             continue
         relations = _get_node_relations(db, node_id)
         similarity = max(0.0, 1.0 - float(distance))
@@ -122,17 +127,18 @@ def hybrid_search(
     if filters:
         all_filters.update(filters)
 
+    engine_filters, fetch_k = _engine_filters(all_filters, k)
     try:
         results = db.hybrid_search(  # ty: ignore[call-non-callable]
             MEMORY_LABEL,
             text_property,
             vector_property,
             query,
-            k,
+            fetch_k,
             query_vector=query_embedding,
             fusion=fusion or "rrf",
             rrf_k=rrf_k,
-            filters=all_filters,
+            filters=engine_filters,
         )
     except Exception:
         logger.warning("hybrid_search failed, falling back to vector_search", exc_info=True)
@@ -153,6 +159,8 @@ def hybrid_search(
 
     search_results: list[SearchResult] = []
     for node_id, _fused_score in results:
+        if len(search_results) >= k:
+            break
         node = db.get_node(node_id)
         if node is None:
             continue
@@ -232,15 +240,16 @@ def diverse_search(
             query_embedding=query_embedding,
         )
 
+    engine_filters, fetch_k = _engine_filters(search_filters, k)
     try:
         results = db.mmr_search(  # ty: ignore[call-non-callable]
             MEMORY_LABEL,
             vector_property,
             query_embedding,
-            k,
-            fetch_k=k * 4,
+            fetch_k,
+            fetch_k=fetch_k * 4,
             lambda_mult=lambda_mult,
-            filters=search_filters,
+            filters=engine_filters,
         )
     except Exception:
         logger.warning("mmr_search failed, falling back to vector_search", exc_info=True)
@@ -257,6 +266,8 @@ def diverse_search(
 
     search_results: list[SearchResult] = []
     for node_id, distance in results:
+        if len(search_results) >= k:
+            break
         node = db.get_node(node_id)
         if node is None:
             continue
@@ -350,6 +361,20 @@ def search_similar(
 
     logger.debug("search_similar: returning %d total results", len(results))
     return results
+
+
+def _engine_filters(filters: dict, k: int) -> tuple[dict, int]:
+    """The filters the engine applies, and how many hits to ask it for.
+
+    ``memory_type="semantic"`` stays a post-hoc check: a memory written before
+    memory_type existed has no such property and counts as semantic
+    (``_matches_filters``), while the engine's equality filter would drop it. The
+    engine is then asked for twice ``k`` hits so the post-hoc check still fills ``k``.
+    Any other filter set goes to the engine unchanged (the same dict).
+    """
+    if filters.get("memory_type") != "semantic":
+        return filters, k
+    return {key: v for key, v in filters.items() if key != "memory_type"}, k * 2
 
 
 def _matches_filters(props: dict, filters: dict) -> bool:

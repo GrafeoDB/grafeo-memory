@@ -14,9 +14,12 @@ Precedence elsewhere in the codebase stays: CLI flag > env var > .env > default.
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from grafeo_memory.common.paths import env_file
 from grafeo_memory.common.types import CacheConfig, MemoryConfig
 
 MB = 1024 * 1024
@@ -25,7 +28,6 @@ MB = 1024 * 1024
 class GrafeoMemorySettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="GRAFEO_MEMORY_",
-        env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
         env_ignore_empty=True,  # `GRAFEO_MEMORY_YOLO=` in an MCP env block means unset, as in 0.2.x
@@ -39,14 +41,15 @@ class GrafeoMemorySettings(BaseSettings):
 
     # --- GRAFEO_MEMORY_CACHE_* ---
     cache_enabled: bool = False
-    cache_max_entries: int = 10_000
-    cache_max_memory_mb: int = 128
-    cache_max_storage_mb: int = 512
+    # gt=0: apply_to() assigns these after MemoryConfig validation has run
+    cache_max_entries: int = Field(default=10_000, gt=0)
+    cache_max_memory_mb: int = Field(default=128, gt=0)
+    cache_max_storage_mb: int = Field(default=512, gt=0)
     cache_persist_path: str | None = None
 
     # --- GRAFEO_MEMORY_DB_* engine limits (MB in env; None = grafeo auto default) ---
-    db_memory_limit_mb: int | None = None
-    db_spill_limit_mb: int | None = None
+    db_memory_limit_mb: int | None = Field(default=None, gt=0)
+    db_spill_limit_mb: int | None = Field(default=None, gt=0)
 
     # --- decision models (pipeline engines; per-stage config stays Python-side) ---
     decision_model: str | None = None  # registered name, e.g. "jev"; None = LLM-only
@@ -66,6 +69,12 @@ class GrafeoMemorySettings(BaseSettings):
     cerebras_api_key: SecretStr | None = Field(default=None, validation_alias="CEREBRAS_API_KEY")
     openrouter_api_key: SecretStr | None = Field(default=None, validation_alias="OPENROUTER_API_KEY")
     typesafe_api_key: SecretStr | None = Field(default=None, validation_alias="TYPESAFE_API_KEY")
+
+    def __init__(self, **values: Any) -> None:
+        # The .env path is resolved per instance (GRAFEO_MEMORY_ENV_FILE, else <repo>/.env),
+        # the same file get_secret() reads; an explicit ``_env_file=`` still wins.
+        values.setdefault("_env_file", env_file())
+        super().__init__(**values)
 
     def cache_config(self) -> CacheConfig | None:
         """CacheConfig when the cache is enabled, else None."""

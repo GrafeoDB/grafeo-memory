@@ -8,7 +8,7 @@ from grafeo_memory.common.cache import (
     cached_model,
     make_key,
 )
-from grafeo_memory.common.exceptions import GrafeoMemoryError, ProviderError, SecretNotFoundError
+from grafeo_memory.common.exceptions import GrafeoMemoryError, SecretNotFoundError
 from grafeo_memory.common.intervals import (
     Allen,
     Bound,
@@ -40,7 +40,6 @@ __all__ = [
     "MemoryCache",
     "MemoryConfig",
     "Precision",
-    "ProviderError",
     "SecretNotFoundError",
     "SecretRedactingFilter",
     "UsageTracker",

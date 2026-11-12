@@ -12,11 +12,15 @@ from pydantic_ai.models import Model
 ModelType = str | Model
 
 
-def provider_of(spec: str) -> str:
-    """The provider prefix of a model spec: "mistral:x" -> "mistral", "gpt-4o" -> "openai"."""
+def provider_of(spec: str) -> str | None:
+    """The provider prefix of a model spec: "mistral:x" -> "mistral".
+
+    A bare name ("gpt-4o", "claude-sonnet-4-5") has no provider: None, as in
+    pydantic-ai's own ``parse_model_id``, which rejects such names.
+    """
     if ":" in spec:
         return spec.split(":", 1)[0]
-    return "openai"
+    return None
 
 
 def resolve_model(spec: str | Model) -> ModelType:

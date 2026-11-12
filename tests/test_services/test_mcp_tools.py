@@ -312,3 +312,20 @@ def test_prompt_templates_render():
         target = getattr(fn, "fn", fn)  # the decorator may wrap the function
         assert isinstance(target(), str) and target()
     assert "travel" in getattr(prompts.manage_memories, "fn", prompts.manage_memories)("travel")
+
+
+def test_entry_point_module_registers_handlers():
+    # A fresh interpreter, as the `grafeo-memory-mcp` console script starts: importing only the
+    # server module must still register every tool, resource and prompt on `mcp`.
+    import subprocess
+    import sys
+
+    code = (
+        "import asyncio\n"
+        "from grafeo_memory.mcp.server import mcp\n"
+        "names = {t.name for t in asyncio.run(mcp.list_tools())}\n"
+        "assert {'memory_add', 'memory_search'} <= names, names\n"
+        "assert asyncio.run(mcp.list_resources()) and asyncio.run(mcp.list_prompts())\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr

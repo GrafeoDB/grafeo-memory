@@ -103,3 +103,47 @@ def test_needs_a_key(monkeypatch):
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     with pytest.raises(ValueError, match="API key"):
         JevDecisionModel()
+
+
+def test_server_error_is_retried(client):
+    client.responses.extend([(503, {"error": {"code": "unavailable"}}), (200, _answers(["q1"]))])
+    d = run_sync(JevDecisionModel(api_key="k").decide_async("state", Q))
+    assert d[0].value == "ADD" and len(client.posts) == 2
+
+
+def test_cache_hit_reports_no_usage(client):
+    cache = MemoryCache(CacheConfig(persist_path=None))
+    client.responses.append((200, _answers(["q1"])))
+    jev = JevDecisionModel(api_key="k", cache=cache)
+    run_sync(jev.decide_async("state", Q))
+    assert jev.last_usage == {"prompt_tokens": 7, "completion_tokens": 0}
+    run_sync(jev.decide_async("state", Q))
+    assert jev.last_usage is None
+
+
+def test_split_batch_sums_usage(client):
+    qs = [CategoricalQuestion(question_id=f"q{i}", question="?", choices=["ADD", "NONE"]) for i in range(2)]
+
+    def respond(payload):
+        if len(payload["questions"]) > 1:
+            return 400, {"error": {"code": "max_tokens_exceeded"}}
+        return 200, _answers(payload["questions"])
+
+    client.responses.extend([respond, respond, respond])
+    jev = JevDecisionModel(api_key="k")
+    run_sync(jev.decide_async("state", qs))
+    assert jev.last_usage == {"prompt_tokens": 14, "completion_tokens": 0}
+
+
+def test_cache_key_names_only_a_non_default_endpoint(client):
+    cache = MemoryCache(CacheConfig(persist_path=None))
+    client.responses.extend([(200, _answers(["q1"])), (200, _answers(["q1"], choice="NONE"))])
+    default = JevDecisionModel(api_key="k", cache=cache)
+    run_sync(default.decide_async("state", Q))
+    payload = default._build_payload("state", Q)
+    assert cache.get("decision", "jev:jev-latest", payload) is not None  # pre-existing key unchanged
+
+    other = JevDecisionModel(api_key="k", cache=cache, base_url="https://staging.example/v1/systemone/")
+    d = run_sync(other.decide_async("state", Q))
+    assert d[0].value == "NONE" and len(client.posts) == 2  # no reuse of the default endpoint's answer
+    assert cache.get("decision", "jev:jev-latest@https://staging.example/v1/systemone", payload) is not None

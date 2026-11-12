@@ -230,9 +230,11 @@ def relation_verdicts(
     existing_relations: Sequence[dict],
     decisions: Sequence[Decision],
 ) -> list[tuple[bool, Decision | None]]:
-    """Per existing relation: (delete?, deciding decision). An existing relation is
-    deleted when any new relation beats KEEP for it (max DELETE probability > max KEEP
-    probability); the deciding decision is the one that won (None: no answer)."""
+    """Per existing relation: (delete?, deciding decision). Each (new, existing) pair is
+    decided on its own: an existing relation is deleted when any new relation's answer
+    for it is DELETE (a confident KEEP from an unrelated new relation does not cancel a
+    contradiction). The deciding decision is the most probable DELETE, else the most
+    probable KEEP (None: no answer)."""
     by_id = {d.question_id: d for d in decisions}
     out: list[tuple[bool, Decision | None]] = []
     for j in range(len(existing_relations)):
@@ -247,9 +249,7 @@ def relation_verdicts(
                     best_delete = d
             elif best_keep is None or d.probability > best_keep.probability:
                 best_keep = d
-        p_delete = best_delete.probability if best_delete is not None else 0.0
-        p_keep = best_keep.probability if best_keep is not None else 0.0
-        delete = p_delete > p_keep
+        delete = best_delete is not None
         out.append((delete, best_delete if delete else best_keep))
     return out
 

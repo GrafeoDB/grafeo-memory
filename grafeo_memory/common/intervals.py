@@ -76,8 +76,10 @@ class Bound:
             return f"{d.year:04d}-{d.month:02d}"
         if self.precision == Precision.DAY:
             return f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
-        if self.precision in (Precision.HOUR, Precision.MINUTE):
-            return d.isoformat(timespec="minutes")  # parse_iso reads HH:MM back as MINUTE
+        if self.precision == Precision.HOUR:
+            return d.isoformat(timespec="hours")  # parse_iso reads a bare HH back as HOUR
+        if self.precision == Precision.MINUTE:
+            return d.isoformat(timespec="minutes")
         return d.isoformat()
 
 
@@ -193,7 +195,10 @@ def allen_inverse(r: Allen) -> Allen:
 def intervals_overlap(a: Interval, b: Interval) -> bool:
     """True when the intervals share at least one point (the five overlap-class
     Allen relations). Non-overlapping intervals are never temporal conflicts: the
-    pre-model reconciliation rule."""
+    pre-model reconciliation rule. An empty interval (closed at its own start) shares
+    no point with anything."""
+    if a.lo >= a.hi or b.lo >= b.hi:
+        return False
     return allen(a, b) in (
         Allen.OVERLAPS,
         Allen.OVERLAPPED_BY,
@@ -218,7 +223,7 @@ def close_at(interval: Interval, bound: Bound) -> Interval:
 # ---------------------------------------------------------------------------
 
 _ISO_RE = re.compile(
-    r"^(\d{4})(?:-(\d{2})(?:-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?)?)?\s*(Z|[+-]\d{2}:?\d{2})?$"
+    r"^(\d{4})(?:-(\d{2})(?:-(\d{2})(?:[T ](\d{2})(?::(\d{2})(?::(\d{2}))?)?)?)?)?\s*(Z|[+-]\d{2}:?\d{2})?$"
 )
 
 
@@ -226,7 +231,7 @@ def parse_iso(text: str) -> Bound | None:
     """Parse an ISO 8601 date/datetime with implicit precision.
 
     "2023" -> year precision, "2023-05" -> month, "2023-05-30" -> day,
-    "2023-05-30T14:00" -> minute, with seconds -> second. Returns None when
+    "2023-05-30T14" -> hour, "2023-05-30T14:00" -> minute, with seconds -> second. Returns None when
     the text is not a date.
     """
     m = _ISO_RE.match(text.strip())
@@ -248,6 +253,8 @@ def parse_iso(text: str) -> Bound | None:
             return Bound(datetime(int(year), int(month), 1, tzinfo=tzinfo), Precision.MONTH)
         if hour is None:
             return Bound(datetime(int(year), int(month), int(day), tzinfo=tzinfo), Precision.DAY)
+        if minute is None:
+            return Bound(datetime(int(year), int(month), int(day), int(hour), tzinfo=tzinfo), Precision.HOUR)
         if second is None:
             return Bound(
                 datetime(int(year), int(month), int(day), int(hour), int(minute), tzinfo=tzinfo),
@@ -287,13 +294,19 @@ def parse_fuzzy(text: str) -> Interval | None:
             lo, hi = start_year + 7, start_year + 10
         else:
             lo, hi = start_year, start_year + 10
+        if lo < 1:  # year 0 does not exist in datetime
+            return None
+        # "9990s" ends at year 10000, past datetime's range: clamp to the open future
+        end = datetime(hi, 1, 1, tzinfo=UTC) if hi <= 9999 else datetime.max.replace(tzinfo=UTC)
         return Interval(
             start=Bound(datetime(lo, 1, 1, tzinfo=UTC), Precision.YEAR),
-            end=Bound(datetime(hi, 1, 1, tzinfo=UTC), Precision.YEAR),
+            end=Bound(end, Precision.YEAR),
         )
     m = _CIRCA_RE.match(tl) or _UNCERTAIN_RE.match(tl)
     if m:
         y = int(m.group(1))
+        if y < 1:
+            return None
         bnd = Bound(datetime(y, 1, 1, tzinfo=UTC), Precision.YEAR)
         return Interval(start=bnd, end=bnd)
     b = parse_iso(t)
@@ -302,12 +315,15 @@ def parse_fuzzy(text: str) -> Interval | None:
     return None
 
 
-def parse_interval(start_iso: str | None, end_iso: str | None) -> Interval | None:
-    """Build an Interval from stored ISO strings (None = unbounded side)."""
+def parse_interval(start_iso: str | None, end_iso: str | None, *, closed: bool = False) -> Interval | None:
+    """Build an Interval from stored ISO strings (None = unbounded side).
+
+    ``to_iso_pair`` writes a point and an empty interval alike as (s, s); pass the
+    stored ``closed`` flag to read the latter back as empty instead of as a point."""
     s = parse_iso(start_iso) if start_iso else None
     e = parse_iso(end_iso) if end_iso else None
     if s is None and start_iso:
         return None
     if e is None and end_iso:
         return None
-    return Interval(start=s, end=e)
+    return Interval(start=s, end=e, closed=closed and e is not None)

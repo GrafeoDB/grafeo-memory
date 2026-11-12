@@ -14,8 +14,9 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 
-from grafeo_memory.core.ontology.scheme import ConceptScheme
+from grafeo_memory.core.ontology.scheme import ConceptScheme, normalize_key
 from grafeo_memory.core.ontology.types import EntityType, coerce_entity_type
 
 EmbedFn = Callable[[str], list[float]]
@@ -55,7 +56,11 @@ def normalize(
     max_candidates: int = 8,
     concept_vectors: dict[str, list[float]] | None = None,
 ) -> Resolution:
-    """Resolve a surface mention to a canonical concept. Deterministic rungs first."""
+    """Resolve a surface mention to a canonical concept. Deterministic rungs first.
+
+    Pass ``concept_vectors`` (a dict kept across calls) with ``embed``: concept label
+    vectors are cached there, otherwise every rung-3 call re-embeds each same-type label.
+    """
     coerced = coerce_entity_type(entity_type)
     et = coerced.value if coerced is not None else EntityType(entity_type).value  # unknown type raises
     # Rung 1: exact prefLabel, typed.
@@ -85,6 +90,8 @@ def normalize(
         # Rung 4: residue, hand the ranked candidates to a categorical question.
         candidates = [cid for _, cid in scored[:max_candidates]]
         return Resolution(mention, et, None, rung=4, confidence=best_score, candidates=candidates)
-    # No embedder: everything unresolved is residue.
-    candidates = [c.id for c in same_type[:max_candidates]]
+    # No embedder: everything unresolved is residue, ranked by label similarity (stable).
+    key = normalize_key(mention)
+    ranked = sorted(same_type, key=lambda c: -SequenceMatcher(None, key, normalize_key(c.pref_label)).ratio())
+    candidates = [c.id for c in ranked[:max_candidates]]
     return Resolution(mention, et, None, rung=4, confidence=0.0, candidates=candidates)

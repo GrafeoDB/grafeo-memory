@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum, StrEnum
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from pydantic_ai.models import KnownModelName, Model
@@ -469,6 +469,7 @@ class ReconciliationDecision:
     confidence: float | None = None
 
 
+@runtime_checkable
 class EmbeddingClient(Protocol):
     """Protocol for text embedding generation (implemented in providers.embedding)."""
 

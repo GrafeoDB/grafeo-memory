@@ -37,7 +37,8 @@ class TestSecrets:
 class TestModelRegistry:
     def test_provider_of(self):
         assert provider_of("mistral:mistral-small-latest") == "mistral"
-        assert provider_of("gpt-4o-mini") == "openai"
+        assert provider_of("gpt-4o-mini") is None
+        assert provider_of("claude-sonnet-4-5") is None
 
     def test_resolve_passes_through(self):
         assert resolve_model("openai:gpt-4o-mini") == "openai:gpt-4o-mini"
@@ -96,3 +97,53 @@ class TestRetrySync:
 
         with pytest.raises(TimeoutError):
             timing.retry_sync(fn, retries=2)
+
+
+class TestTransient:
+    class _HTTPError(Exception):
+        def __init__(self, status: int, msg: str = ""):
+            super().__init__(msg)
+            self.status_code = status
+
+    @pytest.mark.parametrize("status", [429, 500, 502, 503, 504, 529])
+    def test_transient_statuses(self, status):
+        assert timing.is_transient(self._HTTPError(status))
+
+    def test_status_wins_over_message_text(self):
+        # a 400 whose message echoes "500" or "Timeout" from the prompt is not retried
+        assert not timing.is_transient(self._HTTPError(400, "max 500 tokens; ConnectTimeout in prompt"))
+        assert not timing.is_transient(ValueError("429 Timeout Connect"))
+
+    def test_class_names_and_wrapped_causes(self):
+        assert timing.is_transient(TimeoutError())
+        assert timing.is_transient(ConnectionResetError())
+        try:
+            try:
+                raise TimeoutError()
+            except TimeoutError as inner:
+                raise RuntimeError("wrapped") from inner
+        except RuntimeError as outer:
+            assert timing.is_transient(outer)
+
+    def test_zero_retries_still_calls_once(self):
+        assert timing.retry_sync(lambda: "ok", retries=0) == "ok"
+
+        async def fn():
+            return "ok"
+
+        import asyncio
+
+        assert asyncio.run(timing.retry_async(fn, retries=0)) == "ok"
+
+
+def test_embedding_client_protocol_is_runtime_checkable():
+    from grafeo_memory.common.types import EmbeddingClient
+
+    class _Emb:
+        dimensions = 2
+
+        def embed(self, texts):
+            return []
+
+    assert isinstance(_Emb(), EmbeddingClient)
+    assert not isinstance(object(), EmbeddingClient)

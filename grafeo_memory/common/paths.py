@@ -21,7 +21,9 @@ def repo_root() -> Path:
 
 
 def env_file() -> Path:
-    """The .env this process reads: GRAFEO_MEMORY_ENV_FILE, else <repo>/.env."""
+    """The .env that :class:`GrafeoMemorySettings`, :func:`get_secret` and log redaction
+    read: GRAFEO_MEMORY_ENV_FILE, else <repo>/.env. The CLI, MCP server and bench
+    entry points also call ``load_dotenv()``, which searches from the working directory."""
     custom = os.environ.get("GRAFEO_MEMORY_ENV_FILE")
     return Path(custom) if custom else repo_root() / ".env"
 

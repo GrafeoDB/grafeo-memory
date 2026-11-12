@@ -5,10 +5,10 @@ Two engines per call (see ``MemoryConfig.pipeline.relations``):
 - ``Engine.LLM``, the pydantic-ai agent with the existing prompt (default).
 - ``Engine.DECISION`` / ``Engine.HYBRID``, a decision model answers one
   KEEP/DELETE question per (new relation, existing relation) pair; an existing
-  relation is deleted when DELETE beats KEEP for it. HYBRID currently uses the
-  same pack (relation contradiction is a small, high-precision decision space)
-  and escalates nothing to the LLM unless the provider errors, in which case
-  both fall back to the LLM path.
+  relation is deleted when any pair answers DELETE for it. HYBRID uses the same
+  pack and escalates the existing relations whose verdict is below the stage's
+  confidence threshold to one LLM call. A provider error makes both fall back
+  to the LLM path.
 """
 
 from __future__ import annotations

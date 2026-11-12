@@ -209,3 +209,29 @@ def test_minute_precision_round_trips():
     assert b is not None and b.precision == Precision.MINUTE
     again = parse_iso(b.to_iso())
     assert again is not None and again.precision == Precision.MINUTE and again.dt == b.dt
+
+
+class TestReviewFixes:
+    def test_empty_interval_overlaps_nothing(self):
+        open_iv = Interval(start=b("2023-01-01"), end=None)
+        empty = close_at(open_iv, b("2023-01-01"))
+        decade = parse_fuzzy("2020s")
+        assert decade is not None
+        assert not intervals_overlap(empty, decade) and not intervals_overlap(decade, empty)
+
+    def test_decade_at_the_end_of_the_calendar_does_not_raise(self):
+        out = parse_fuzzy("9990s")
+        assert out is not None and out.end is not None
+        assert out.end.dt == datetime.max.replace(tzinfo=UTC)
+        assert parse_fuzzy("0000s") is None and parse_fuzzy("circa 0000") is None
+
+    def test_hour_precision_round_trips(self):
+        h = Bound(datetime(2023, 5, 30, 14, tzinfo=UTC), Precision.HOUR)
+        back = parse_iso(h.to_iso())
+        assert back == h and back.hi == datetime(2023, 5, 30, 15, tzinfo=UTC)
+
+    def test_parse_interval_keeps_closed_flag(self):
+        point = parse_interval("2023-05-30", "2023-05-30")
+        empty = parse_interval("2023-05-30", "2023-05-30", closed=True)
+        assert point is not None and point.is_point
+        assert empty is not None and not empty.is_point and empty.lo == empty.hi

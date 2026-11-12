@@ -57,8 +57,8 @@ class GrafeoDBProtocol(Protocol):
     conforming database must implement them.
 
     Optional methods (hybrid_search, mmr_search, batch_create_nodes_with_props,
-    algorithms, close, detailed_stats) are checked via hasattr at call sites
-    and intentionally excluded.
+    algorithms, close, memory_usage, detailed_stats) are looked up with
+    getattr/hasattr at call sites and intentionally excluded.
 
     ``execute`` must accept ``DETACH DELETE`` and ``SET`` statements: they
     delete a node with its edges and stamp history nodes (see ``_graph.py``
@@ -126,7 +126,3 @@ class GrafeoDBProtocol(Protocol):
     # -- Info --
 
     def info(self) -> dict[str, Any]: ...
-
-    def memory_usage(self) -> dict[str, Any]: ...
-
-    def detailed_stats(self) -> dict[str, Any]: ...

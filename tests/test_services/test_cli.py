@@ -297,3 +297,14 @@ def test_mistral_embedder_from_installed_sdk(monkeypatch):
     assert mistral_client_class().__name__ == "Mistral"
     monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
     assert isinstance(_create_embedder("mistral:mistral-small-latest"), MistralEmbedder)
+
+
+@pytest.mark.parametrize(("env_user", "expected"), [("carol", "carol"), ("", "default")])
+def test_delete_all_prompt_names_the_managers_user(monkeypatch, fake_manager, env_user, expected):
+    # The prompt resolves the user as the manager does (settings ignore an empty variable).
+    monkeypatch.setenv("GRAFEO_MEMORY_USER", env_user)
+    prompts: list[str] = []
+    monkeypatch.setattr("builtins.input", lambda msg: prompts.append(msg) or "n")
+    _run(["delete", "--all"], fake_manager)
+    assert f"user '{expected}'" in prompts[0]
+    assert fake_manager.calls == []

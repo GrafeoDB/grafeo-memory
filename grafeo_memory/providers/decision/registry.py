@@ -30,12 +30,17 @@ def _load_entrypoints() -> None:
         from importlib.metadata import entry_points
 
         eps = entry_points(group=_ENTRYPOINT_GROUP)
-        for ep in eps:
-            if ep.name not in _REGISTRY:
-                # ep.load() returns the provider class/factory; register that, not the loader.
-                _REGISTRY[ep.name] = ep.load()
     except Exception:
-        logger.debug("loading decision-model entry points failed", exc_info=True)
+        logger.warning("listing decision-model entry points failed", exc_info=True)
+        return
+    for ep in eps:
+        if ep.name in _REGISTRY:
+            continue
+        try:
+            # ep.load() returns the provider class/factory; register that, not the loader.
+            _REGISTRY[ep.name] = ep.load()
+        except Exception:  # one broken plugin must not hide the others
+            logger.warning("failed to load decision-model entry point %r", ep.name, exc_info=True)
 
 
 def _instantiate(factory: Callable[..., Any], kwargs: dict) -> Any:
@@ -56,9 +61,12 @@ def _instantiate(factory: Callable[..., Any], kwargs: dict) -> Any:
 def get_decision_model(spec: str | Any, **kwargs) -> Any:
     """Resolve ``spec`` to a DecisionModel.
 
-    ``spec`` may be a DecisionModel instance (returned as-is), a registered
-    name (``"jev"``, ``"fake"``), or an entry-point name.
+    ``spec`` may be a DecisionModel instance (returned as-is), a DecisionModel
+    class (instantiated with ``kwargs``), a registered name (``"jev"``,
+    ``"fake"``), or an entry-point name.
     """
+    if isinstance(spec, type) and hasattr(spec, "decide_async"):
+        return _instantiate(spec, kwargs)
     if hasattr(spec, "decide_async"):
         return spec
     if not isinstance(spec, str):

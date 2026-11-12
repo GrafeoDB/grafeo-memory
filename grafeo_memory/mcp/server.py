@@ -115,9 +115,6 @@ async def app_lifespan(server: MCPServer) -> AsyncGenerator[AppContext]:
 mcp = MCPServer("grafeo-memory", lifespan=app_lifespan)
 
 
-# Import modules to register tools/resources/prompts on the mcp instance.
-
-
 def main():
     from grafeo_memory.common.logging import configure_entry_point_logging
 
@@ -132,4 +129,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # `python -m` runs a second copy of this module; use the package one, which has the handlers registered.
+    import importlib
+
+    importlib.import_module("grafeo_memory.mcp.server").main()

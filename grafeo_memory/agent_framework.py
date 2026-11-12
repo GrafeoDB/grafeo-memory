@@ -68,9 +68,32 @@ LABEL_PREFIX = "AF_"
 _DISTANCE_FUNCTIONS = {"cosine_distance", "DEFAULT", None}
 
 
+def _encode_char(ch: str) -> str:
+    if ch.isascii() and ch.isalnum():
+        return ch
+    return "__" if ch == "_" else f"_{ord(ch):x}_"
+
+
+def _decode_escape(m: re.Match[str]) -> str:
+    return chr(int(m.group(1), 16)) if m.group(1) else "_"
+
+
 def label_for(collection_name: str) -> str:
-    """The grafeo label holding one collection's records."""
-    return LABEL_PREFIX + re.sub(r"[^0-9A-Za-z_]", "_", collection_name)
+    """The grafeo label holding one collection's records.
+
+    Reversible, so distinct names never share a label: ASCII letters and digits are
+    kept, ``_`` becomes ``__`` and any other character ``_<hex code point>_``.
+    """
+    return LABEL_PREFIX + "".join(_encode_char(ch) for ch in collection_name)
+
+
+def collection_name_for(label: str) -> str:
+    """The collection name a ``label_for`` label encodes."""
+    return re.sub(r"__|_([0-9a-f]+)_", _decode_escape, label[len(LABEL_PREFIX) :])
+
+
+class _Unsatisfiable(Exception):
+    """A filter no record can match (conflicting equalities in an ``and`` group)."""
 
 
 class GrafeoVectorCollection(BaseVectorCollection[KeyT, ModelT], BaseVectorSearch[KeyT, ModelT]):
@@ -130,13 +153,29 @@ class GrafeoVectorCollection(BaseVectorCollection[KeyT, ModelT], BaseVectorSearc
             raise ValueError(f"Collection '{self.collection_name}' has no vector field")
         return field
 
+    def _record(self, props: Mapping[str, Any]) -> dict[str, Any]:
+        """A node's properties as a store record: grafeo stores no nulls, so an absent field reads as None."""
+        rec = dict(props)
+        for field in self.definition.fields:
+            rec.setdefault(field.storage_name or field.name, None)
+        return rec
+
+    def _find_by_key(self, key: Any) -> list[Any]:
+        """Node ids of this collection's records with ``key``; the property lookup is database-wide."""
+        out = []
+        for node_id in self._db.find_nodes_by_property(self._key_storage, key):
+            node = self._db.get_node(node_id)
+            if node is not None and node.has_label(self._label):
+                out.append(node_id)
+        return out
+
     async def ensure_collection_exists(self, *, operation_options: Mapping[str, Any] | None = None) -> None:
         self._db.create_property_index(self._key_storage)
-        field = self._vector_field()
-        if field.dimensions:
-            self._db.create_vector_index(
-                self._label, field.storage_name or field.name, dimensions=field.dimensions, metric="cosine"
-            )
+        for field in self.definition.vector_fields:
+            if field.dimensions:
+                self._db.create_vector_index(
+                    self._label, field.storage_name or field.name, dimensions=field.dimensions, metric="cosine"
+                )
 
     async def collection_exists(self, *, operation_options: Mapping[str, Any] | None = None) -> bool:
         if self._db.get_nodes_by_label(self._label, limit=1):
@@ -148,10 +187,10 @@ class GrafeoVectorCollection(BaseVectorCollection[KeyT, ModelT], BaseVectorSearc
 
     async def ensure_collection_deleted(self, *, operation_options: Mapping[str, Any] | None = None) -> None:
         self._db.execute(f"MATCH (n:{self._label}) DETACH DELETE n", {})
-        field = self._vector_field()
         drop = getattr(self._db, "drop_vector_index", None)
         if callable(drop):
-            drop(self._label, field.storage_name or field.name)
+            for field in self.definition.vector_fields:
+                drop(self._label, field.storage_name or field.name)
 
     async def _inner_upsert(
         self, records: Sequence[Any], *, operation_options: Mapping[str, Any] | None = None
@@ -167,15 +206,20 @@ class GrafeoVectorCollection(BaseVectorCollection[KeyT, ModelT], BaseVectorSearc
                     key = rec[self._key_storage] = str(uuid4())
                 else:
                     raise ValueError(f"Record is missing key field '{self.definition.key_field.name}'.")
-            matches = self._db.find_nodes_by_property(self._key_storage, key)
+            # grafeo stores no null properties; a None field reads as absent
+            props = {k: v for k, v in rec.items() if v is not None}
+            matches = self._find_by_key(key)
             if matches:
+                # Replace the record in place: drop properties it no longer has, set the rest.
                 node_id = matches[0]
-                for name, value in rec.items():
-                    if value is None:
-                        continue  # grafeo stores no null properties; a missing key reads as absent
+                node = self._db.get_node(node_id)
+                for name in node.keys() if node is not None else ():
+                    if name not in props:
+                        self._db.remove_node_property(node_id, name)
+                for name, value in props.items():
                     self._db.set_node_property(node_id, name, value)
             else:
-                self._db.create_node([self._label], {k: v for k, v in rec.items() if v is not None})
+                self._db.create_node([self._label], props)
             keys.append(cast(KeyT, key))
         return keys
 
@@ -193,13 +237,16 @@ class GrafeoVectorCollection(BaseVectorCollection[KeyT, ModelT], BaseVectorSearc
         if keys is not None:
             out: list[dict[str, Any]] = []
             for key in keys:
-                for node_id in self._db.find_nodes_by_property(self._key_storage, key):
+                for node_id in self._find_by_key(key):
                     node = self._db.get_node(node_id)
                     if node is not None:
-                        out.append(dict(node.properties()))
+                        out.append(self._record(node.properties()))
             return out
-        records = [dict(props) for _node_id, props in self._db.get_nodes_by_label(self._label)]
-        translated = self._translate_filter(filter)
+        try:
+            translated = self._translate_filter(filter)
+        except _Unsatisfiable:
+            return []
+        records = [self._record(props) for _node_id, props in self._db.get_nodes_by_label(self._label)]
         if translated:
             records = [r for r in records if all(r.get(k) == v for k, v in translated.items())]
         if order_by:
@@ -209,7 +256,7 @@ class GrafeoVectorCollection(BaseVectorCollection[KeyT, ModelT], BaseVectorSearc
 
     async def _inner_delete(self, keys: Sequence[KeyT], *, operation_options: Mapping[str, Any] | None = None) -> None:
         for key in keys:
-            for node_id in self._db.find_nodes_by_property(self._key_storage, key):
+            for node_id in self._find_by_key(key):
                 self._db.execute("MATCH (n) WHERE id(n) = $id DETACH DELETE n", {"id": node_id})
 
     async def _inner_search(
@@ -238,7 +285,10 @@ class GrafeoVectorCollection(BaseVectorCollection[KeyT, ModelT], BaseVectorSearc
             raise NotImplementedError(f"Distance function '{field.distance_function}' is not supported; use cosine.")
         storage_name = field.storage_name or field.name
         query_vector = [float(x) for x in vector]
-        translated = self._translate_filter(filter)
+        try:
+            translated = self._translate_filter(filter)
+        except _Unsatisfiable:
+            return SearchResults([])
         hits = self._db.vector_search(self._label, storage_name, query_vector, top + skip, filters=translated)
         results: list[dict[str, Any]] = []
         for node_id, distance in hits:
@@ -247,12 +297,12 @@ class GrafeoVectorCollection(BaseVectorCollection[KeyT, ModelT], BaseVectorSearc
             node = self._db.get_node(node_id)
             if node is None:
                 continue
-            props = dict(node.properties())
+            props = self._record(node.properties())
             if not include_vectors:
                 props.pop(storage_name, None)
             results.append({"record": props, "score": distance})
         results.sort(key=lambda r: r["score"])
-        return SearchResults(results[skip : skip + top], metadata={"grafeo_total_count": len(hits)})
+        return SearchResults(results[skip : skip + top])
 
     def _get_record_from_result(self, result: Any) -> Any:
         return result["record"]
@@ -277,9 +327,10 @@ class GrafeoVectorCollection(BaseVectorCollection[KeyT, ModelT], BaseVectorSearc
                 )
             merged: dict[str, Any] = {}
             for child in filter.filters:
-                part = self._translate_filter(child)
-                if part:
-                    merged.update(part)
+                for name, value in (self._translate_filter(child) or {}).items():
+                    if name in merged and merged[name] != value:
+                        raise _Unsatisfiable(name)  # `kind == a AND kind == b` matches nothing
+                    merged[name] = value
             return merged or None
         raise NotImplementedError(f"Unsupported filter type {type(filter).__name__}")
 
@@ -321,7 +372,7 @@ class GrafeoVectorStore(BaseVectorStore):
                 label = name.split(":", 1)[0]
                 if label not in names:
                     names.append(label)
-        return sorted(n[len(LABEL_PREFIX) :] for n in names)
+        return sorted(collection_name_for(n) for n in names)
 
     async def _inner_ensure_collection_deleted(
         self, collection_name: str, *, operation_options: Mapping[str, Any] | None = None

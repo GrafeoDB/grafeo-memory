@@ -8,10 +8,13 @@ from grafeo_memory import CacheConfig, GrafeoMemorySettings, MemoryConfig
 
 
 @pytest.fixture(autouse=True)
-def _clean_env(monkeypatch):
+def _clean_env(monkeypatch, tmp_path):
     for k in list(__import__("os").environ):
         if k.startswith("GRAFEO_MEMORY_") or k.endswith("_API_KEY"):
             monkeypatch.delenv(k, raising=False)
+    # keep a developer-local .env (cwd or checkout root) out of settings loading
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GRAFEO_MEMORY_ENV_FILE", str(tmp_path / ".env"))
     yield
 
 
@@ -71,6 +74,29 @@ class TestSettings:
         assert s.cache_enabled is True
         assert s.openai_api_key is not None and s.openai_api_key.get_secret_value() == "sk-test-123"
 
+    def test_env_file_override(self, tmp_path, monkeypatch):
+        custom = tmp_path / "custom.env"
+        custom.write_text("GRAFEO_MEMORY_USER=bob\n")
+        monkeypatch.setenv("GRAFEO_MEMORY_ENV_FILE", str(custom))
+        assert GrafeoMemorySettings().user == "bob"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "GRAFEO_MEMORY_CACHE_MAX_ENTRIES",
+            "GRAFEO_MEMORY_CACHE_MAX_MEMORY_MB",
+            "GRAFEO_MEMORY_CACHE_MAX_STORAGE_MB",
+            "GRAFEO_MEMORY_DB_MEMORY_LIMIT_MB",
+            "GRAFEO_MEMORY_DB_SPILL_LIMIT_MB",
+        ],
+    )
+    def test_non_positive_limits_are_rejected(self, monkeypatch, name):
+        from pydantic import ValidationError
+
+        monkeypatch.setenv(name, "0")
+        with pytest.raises(ValidationError):
+            GrafeoMemorySettings()
+
 
 def test_redaction_filter_scrubs_child_logger_records(monkeypatch):
     """0.3.0 review: the filter sits on handlers, so records of child loggers are scrubbed too."""
@@ -92,3 +118,58 @@ def test_redaction_filter_scrubs_child_logger_records(monkeypatch):
         root.removeHandler(handler)
     assert "ts-very-secret-value" not in stream.getvalue()
     assert "***REDACTED***" in stream.getvalue()
+
+
+def _capture(monkeypatch):
+    import io
+    import logging
+
+    from grafeo_memory.common.logging import install_redaction
+
+    logger = logging.getLogger("redaction_test_capture")
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    logger.addHandler(handler)
+    logger.propagate = False
+    install_redaction(logger)
+    return logger, handler, stream
+
+
+def test_redaction_scrubs_tracebacks_and_survives_bad_format_calls(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-very-secret-value")
+    logger, handler, stream = _capture(monkeypatch)
+    try:
+        try:
+            raise RuntimeError("auth failed for ts-very-secret-value")
+        except RuntimeError:
+            logger.exception("call failed")
+        logger.warning("%s %s", "only-one-arg")  # malformed: must not raise
+    finally:
+        logger.removeHandler(handler)
+    out = stream.getvalue()
+    assert "ts-very-secret-value" not in out and "***REDACTED***" in out
+    assert "%s %s" in out
+
+
+def test_redaction_covers_dotenv_only_secrets(monkeypatch, tmp_path):
+    env = tmp_path / "secrets.env"
+    env.write_text("MISTRAL_API_KEY=mistral-dotenv-secret\n", encoding="utf-8")
+    monkeypatch.setenv("GRAFEO_MEMORY_ENV_FILE", str(env))
+    logger, handler, stream = _capture(monkeypatch)
+    try:
+        logger.warning("key=%s", "mistral-dotenv-secret")
+    finally:
+        logger.removeHandler(handler)
+    assert "mistral-dotenv-secret" not in stream.getvalue()
+
+
+def test_empty_log_level_means_default(monkeypatch):
+    import logging
+
+    from grafeo_memory.common import logging as gm_logging
+
+    monkeypatch.setenv("GRAFEO_MEMORY_LOG_LEVEL", "")
+    seen = {}
+    monkeypatch.setattr(logging, "basicConfig", lambda **kw: seen.update(kw))
+    gm_logging.configure_entry_point_logging()
+    assert seen["level"] == "WARNING"

@@ -8,7 +8,10 @@ import logging
 import os
 import sys
 from dataclasses import asdict
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from grafeo_memory.common.settings import GrafeoMemorySettings
 
 logger = logging.getLogger(__name__)
 
@@ -76,11 +79,13 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _resolve(args_val: str | None, env_key: str, default: str | None = None) -> str | None:
-    """Resolve config: CLI flag > env var > default."""
-    if args_val is not None:
-        return args_val
-    return os.environ.get(env_key, default)
+def _user_id(args: argparse.Namespace, settings: GrafeoMemorySettings | None = None) -> str:
+    """The user the command acts for: --user > GRAFEO_MEMORY_USER (env or .env) > default."""
+    if settings is None:
+        from grafeo_memory.common.settings import GrafeoMemorySettings
+
+        settings = GrafeoMemorySettings()
+    return args.user or settings.user
 
 
 def _create_embedder(model: str):
@@ -136,7 +141,7 @@ def _create_manager(args: argparse.Namespace):
 
     model = args.model or settings.model
     db_path = args.db or settings.db
-    user_id = args.user or settings.user
+    user_id = _user_id(args, settings)
 
     embedder = _create_embedder(model)
     if args.yolo or settings.yolo:
@@ -229,7 +234,7 @@ def _cmd_update(manager, args: argparse.Namespace) -> None:
 def _cmd_delete(manager, args: argparse.Namespace) -> None:
     if args.delete_all:
         if not args.yes:
-            user_id = _resolve(args.user, "GRAFEO_MEMORY_USER", "default")
+            user_id = _user_id(args)  # the same resolution the manager was built with
             answer = input(f"Delete ALL memories for user '{user_id}'? [y/N] ")
             if answer.lower() not in ("y", "yes"):
                 print("Aborted.")

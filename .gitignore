@@ -50,6 +50,11 @@ htmlcov/
 *.llmcache.jsonl
 *.grafeo
 *.grafeo.wal/
+# left by the 0.6 upgrade (full copies of the old database) and by queries that spill to disk
+*.grafeo.pre-0.6
+*.grafeo.pre-0.6.wal/
+*.db.pre-0.6/
+*.grafeo.spill/
 
 # Claude Code project context (internal)
 .claude/

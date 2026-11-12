@@ -32,7 +32,9 @@ import os
 import threading
 import time
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import urlparse
 
 from pydantic_ai.models import Model
 
@@ -51,20 +53,36 @@ def canonical_json(obj: Any) -> str:
 _VOLATILE_FIELDS = {"timestamp", "conversation_id", "run_id"}
 
 
-def _to_jsonable(obj: Any) -> Any:
+def _to_jsonable(obj: Any, *, strip_keys: bool = True) -> Any:
+    """JSON-ready form. Volatile dataclass fields (message metadata) are always
+    dropped; volatile dict keys only when ``strip_keys`` (request keys, never
+    stored values, where they may be real data such as tool-call arguments)."""
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         return {
-            f.name: _to_jsonable(getattr(obj, f.name))
+            f.name: _to_jsonable(getattr(obj, f.name), strip_keys=strip_keys)
             for f in dataclasses.fields(obj)
             if f.name not in _VOLATILE_FIELDS
         }
     if hasattr(obj, "model_dump"):
-        return _to_jsonable(obj.model_dump(mode="json"))
+        return _to_jsonable(obj.model_dump(mode="json"), strip_keys=strip_keys)
     if isinstance(obj, dict):
-        return {str(k): _to_jsonable(v) for k, v in obj.items() if k not in _VOLATILE_FIELDS}
+        return {
+            str(k): _to_jsonable(v, strip_keys=strip_keys)
+            for k, v in obj.items()
+            if not (strip_keys and k in _VOLATILE_FIELDS)
+        }
     if isinstance(obj, (list, tuple)):
-        return [_to_jsonable(v) for v in obj]
+        return [_to_jsonable(v, strip_keys=strip_keys) for v in obj]
     return obj
+
+
+def _value_jsonable(obj: Any) -> Any:
+    return _to_jsonable(obj, strip_keys=False)
+
+
+def _value_json(obj: Any) -> str:
+    """Canonical JSON of a stored value (volatile dict keys kept)."""
+    return json.dumps(_value_jsonable(obj), sort_keys=True, separators=(",", ":"), default=str)
 
 
 def make_key(kind: str, model: str, request: Any) -> str:
@@ -173,6 +191,10 @@ def _counter(name: str) -> Any:
     return c
 
 
+# Compaction shrinks the file to this share of max_storage_bytes.
+_COMPACT_WATERMARK = 0.8
+
+
 class MemoryCache:
     """Thread-safe in-memory LRU cache with optional JSONL persistence."""
 
@@ -220,14 +242,14 @@ class MemoryCache:
 
     def put(self, kind: str, model: str, request: Any, value: Any) -> None:
         key = make_key(kind, model, request)
-        val = canonical_json(value)
-        line = canonical_json(
+        val = _value_json(value)
+        line = _value_json(  # request already stripped; the value keeps its volatile keys
             {
                 "key": key,
                 "kind": kind,
                 "model": str(model),
                 "request": _to_jsonable(request),
-                "value": _to_jsonable(value),
+                "value": _value_jsonable(value),
                 "ts": time.time(),
             }
         )
@@ -316,18 +338,31 @@ class MemoryCache:
             return
         now = time.time()
         ttl = self._cfg.ttl_seconds
-        records = self._read_file(path)
-        # Oldest first, so LRU eviction (from the front) drops the oldest entries;
-        # the file may be in append order or newest-first after a compaction.
-        loaded = 0
-        for key, (ts, val) in sorted(records.items(), key=lambda kv: kv[1][0]):
+        try:
+            records = self._read_file(path)
+        except OSError:  # unreadable file or a directory: run without the persisted entries
+            logger.warning("cache: cannot read %s", path, exc_info=True)
+            return
+        # Keep only the newest entries that fit the hot-cache limits (the file may be
+        # in append order or newest-first after a compaction), then insert them oldest
+        # first so LRU eviction drops the oldest.
+        ordered = sorted(records.items(), key=lambda kv: kv[1][0])
+        del records
+        keep: list[tuple[str, float, str]] = []
+        nbytes = 0
+        for key, (ts, val) in reversed(ordered):
             if ttl is not None and now - ts > ttl:
                 continue
+            size = len(key) + len(val)
+            if len(keep) >= self._cfg.max_entries or nbytes + size > self._cfg.max_memory_bytes:
+                break
+            keep.append((key, ts, val))
+            nbytes += size
+        del ordered
+        for key, ts, val in reversed(keep):
             self._entries[key] = (ts, val)
-            self._bytes += len(key) + len(val)
-            loaded += 1
-        self._evict_locked()
-        logger.debug("cache: loaded %d entries from %s", loaded, path)
+        self._bytes += nbytes
+        logger.debug("cache: loaded %d entries from %s", len(keep), path)
 
     def _append_locked(self, line: str) -> None:
         path = self._persist_path
@@ -352,7 +387,7 @@ class MemoryCache:
                     continue
                 try:
                     rec = json.loads(line)
-                    key, val, ts = rec["key"], canonical_json(rec["value"]), float(rec.get("ts", 0) or 0)
+                    key, val, ts = rec["key"], _value_json(rec["value"]), float(rec.get("ts", 0) or 0)
                 except (KeyError, TypeError, ValueError):  # torn or foreign line
                     continue
                 if key not in records or ts >= records[key][0]:
@@ -360,7 +395,9 @@ class MemoryCache:
         return records
 
     def _compact_locked(self) -> None:
-        """Rewrite the persistence file newest-first, bounded by max_storage_bytes.
+        """Rewrite the persistence file newest-first, down to a low watermark of
+        max_storage_bytes so the next compaction is many writes away. A record larger
+        than that on its own is dropped, so the file always ends under the cap.
 
         Built from the file itself plus this instance's entries, never from memory
         alone: the in-memory LRU is bounded and other instances may share the file."""
@@ -373,13 +410,16 @@ class MemoryCache:
             for key, (ts, val) in self._entries.items():
                 if key not in records or ts >= records[key][0]:
                     records[key] = (ts, val)
+            target = int(self._cfg.max_storage_bytes * _COMPACT_WATERMARK)
             written = 0
             with open(tmp, "w", encoding="utf-8") as f:
                 for key, (ts, val) in sorted(records.items(), key=lambda kv: kv[1][0], reverse=True):  # newest first
                     line = json.dumps(
                         {"key": key, "ts": ts, "value": json.loads(val)}, sort_keys=True, separators=(",", ":")
                     )
-                    if written > 0 and written + len(line) + 1 > self._cfg.max_storage_bytes:
+                    if len(line) + 1 > target:
+                        continue
+                    if written + len(line) + 1 > target:
                         break
                     f.write(line + "\n")
                     written += len(line) + 1
@@ -392,22 +432,36 @@ class MemoryCache:
 # ``model_name`` cache key (so existing caches stay valid); any other endpoint
 # (Azure, Ollama, a gateway) adds ``system@base_url`` so two endpoints serving the
 # same model name never share entries.
-_OFFICIAL_HOSTS = (
-    "api.openai.com",
-    "api.mistral.ai",
-    "api.anthropic.com",
-    "api.groq.com",
-    "generativelanguage.googleapis.com",
-    "api.cohere.com",
-    "api.deepseek.com",
-    "api.x.ai",
+_OFFICIAL_HOSTS = frozenset(
+    {
+        "api.openai.com",
+        "api.mistral.ai",
+        "api.anthropic.com",
+        "api.groq.com",
+        "generativelanguage.googleapis.com",
+        "api.cohere.com",
+        "api.deepseek.com",
+        "api.x.ai",
+    }
 )
+
+
+def _is_official(base_url: Any) -> bool:
+    """True when ``base_url`` is unset or its hostname is exactly a provider's own API host."""
+    if not base_url:
+        return True
+    url = str(base_url).strip()
+    try:
+        host = urlparse(url if "//" in url else f"//{url}").hostname
+    except ValueError:
+        return False
+    return host in _OFFICIAL_HOSTS
 
 
 def _chat_cache_model(inner: Any) -> str:
     name = str(getattr(inner, "model_name", "") or type(inner).__name__)
     base_url = getattr(inner, "base_url", None)
-    if not base_url or any(h in str(base_url) for h in _OFFICIAL_HOSTS):
+    if _is_official(base_url):
         return name
     return f"{name}|{getattr(inner, 'system', '')}@{str(base_url).rstrip('/')}"
 
@@ -464,30 +518,56 @@ class CachingModel(Model):
         if hit is not None:
             return _revive(hit)
         resp = await inner.request(messages, model_settings, model_request_parameters)
-        self._cache.put("chat", key_model, req, _to_jsonable(resp))
+        self._cache.put("chat", key_model, req, _value_jsonable(resp))
         return resp
 
+    @asynccontextmanager
     async def request_stream(self, *args, **kwargs):
-        # Streaming responses are not cached.
-        async for chunk in self._resolve().request_stream(*args, **kwargs):
-            yield chunk
+        # Streaming responses are not cached; an async context manager like Model.request_stream.
+        async with self._resolve().request_stream(*args, **kwargs) as stream:
+            yield stream
+
+
+def _embed_endpoint(inner: Any) -> str | None:
+    """The embedder's API endpoint, from itself or its SDK client (``base_url`` for
+    OpenAI-style clients, ``sdk_configuration`` for Mistral); None when unknown."""
+    for src in (inner, getattr(inner, "_client", None), getattr(inner, "client", None)):
+        if src is None:
+            continue
+        url = getattr(src, "base_url", None)
+        if isinstance(url, str) or type(url).__name__ == "URL":  # str or httpx.URL, never a mock
+            return str(url)
+        get_details = getattr(getattr(src, "sdk_configuration", None), "get_server_details", None)
+        if callable(get_details):
+            try:
+                details = get_details()
+            except Exception:
+                continue
+            if isinstance(details, tuple) and details and isinstance(details[0], str):
+                return details[0]
+    return None
 
 
 def _embed_cache_model(inner: Any, dimensions: int) -> str:
     """Cache-key model string for an embedder: ``<Class>:<dims>``, plus ``:<model>``
-    when the embedder runs a model other than its class default (so two models of
-    one class never share entries, while default-model keys stay as before)."""
+    when the embedder runs a model other than its class default, plus ``@<endpoint>``
+    when it calls an endpoint other than the provider's own API (so two models or
+    endpoints never share entries, while default keys stay as before)."""
     import inspect
 
-    base = f"{type(inner).__name__}:{dimensions}"
+    key = f"{type(inner).__name__}:{dimensions}"
     model = getattr(inner, "model", None) or getattr(inner, "_model", None)
-    if not isinstance(model, str):
-        return base
-    try:
-        default = inspect.signature(type(inner)).parameters["model"].default
-    except (KeyError, TypeError, ValueError):
-        default = inspect.Parameter.empty
-    return base if model == default else f"{base}:{model}"
+    if isinstance(model, str):
+        try:
+            default = inspect.signature(type(inner)).parameters["model"].default
+        except (KeyError, TypeError, ValueError):
+            default = inspect.Parameter.empty
+        if model != default:
+            key = f"{key}:{model}"
+    endpoint = _embed_endpoint(inner)
+    if not _is_official(endpoint):
+        key = f"{key}@{str(endpoint).rstrip('/')}"
+    return key
 
 
 class CachingEmbedder:

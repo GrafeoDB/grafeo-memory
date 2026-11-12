@@ -122,16 +122,24 @@ def record_history_batch(
     return ids
 
 
-def adopt_legacy_history(db: GrafeoDBProtocol, memory_node_id: int) -> None:
+def adopt_legacy_history(db: GrafeoDBProtocol, memory_node_id: int, *, graph_name: str | None = None) -> None:
     """Stamp ``memory_id`` on 0.1.x ``:History`` nodes linked to a memory by ``HAS_HISTORY``.
 
     Call this before the memory node is deleted: deleting it removes the
-    ``HAS_HISTORY`` edges, and the stamp keeps those entries reachable.
+    ``HAS_HISTORY`` edges, and the stamp keeps those entries reachable. With
+    ``graph_name`` (the memory's scope), unscoped entries are stamped with it too,
+    so a graph-scoped manager still reads them.
     """
     db.execute(
         f"MATCH (m)-[:{HAS_HISTORY_EDGE}]->(h:{HISTORY_LABEL}) WHERE id(m) = $mid SET h.{MEMORY_ID_PROPERTY} = $mid",
         {"mid": int(memory_node_id)},
     )
+    if graph_name is not None:
+        db.execute(
+            f"MATCH (m)-[:{HAS_HISTORY_EDGE}]->(h:{HISTORY_LABEL}) WHERE id(m) = $mid AND h.graph_name IS NULL "
+            "SET h.graph_name = $gn",
+            {"mid": int(memory_node_id), "gn": graph_name},
+        )
 
 
 def get_history(
@@ -156,6 +164,14 @@ def get_history(
             db.execute(
                 f"MATCH (h:{HISTORY_LABEL}) WHERE h.{MEMORY_ID_PROPERTY} = $mid AND h.graph_name = $gn "
                 f"{_RETURN_FIELDS}",
+                {"mid": mid, "gn": graph_name},
+            )
+        )
+        # 0.1.x entries carry no scope: they are in scope when their memory is.
+        rows.extend(
+            db.execute(
+                f"MATCH (m)-[:{HAS_HISTORY_EDGE}]->(h:{HISTORY_LABEL}) WHERE id(m) = $mid AND m.graph_name = $gn "
+                f"AND h.graph_name IS NULL {_RETURN_FIELDS}",
                 {"mid": mid, "gn": graph_name},
             )
         )

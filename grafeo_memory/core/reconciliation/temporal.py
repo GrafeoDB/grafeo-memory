@@ -52,9 +52,10 @@ _DATE = re.compile(
     rf"|(?P<year>\b{_YEAR}\b)",
     re.IGNORECASE,
 )
-_START_CUE = re.compile(r"\b(?:since|from|starting(?:\s+in|\s+on)?|beginning(?:\s+in|\s+on)?|as\s+of)\s*$", re.I)
-_END_CUE = re.compile(r"\b(?:until|till|til|through|up\s+to)\s*$", re.I)
-_POINT_CUE = re.compile(r"\b(?:in|on|during|of|at|by|around|about|circa|year|before|after)\s*$", re.I)
+# "after X" opens an interval at X and "before X" closes one there: neither is a point in X.
+_START_CUE = re.compile(r"\b(?:since|from|after|starting(?:\s+in|\s+on)?|beginning(?:\s+in|\s+on)?|as\s+of)\s*$", re.I)
+_END_CUE = re.compile(r"\b(?:until|till|til|through|up\s+to|before)\s*$", re.I)
+_POINT_CUE = re.compile(r"\b(?:in|on|during|of|at|by|around|about|circa|year)\s*$", re.I)
 _RANGE_JOIN = re.compile(r"^\s*(?:-|\u2013|\u2014|to|until|till|through)\s*$", re.I)  # hyphen, en or em dash
 _AND_JOIN = re.compile(r"^\s*and\s*$", re.I)
 _BETWEEN = re.compile(r"\bbetween\s*$", re.I)
@@ -150,5 +151,8 @@ def partition_candidates(
 
 def close_interval_on_supersede(old: Interval, new_start: Bound) -> Interval:
     """UPDATE = interval-closing: the superseded fact's validity ends at the
-    new fact's validity boundary (half-open, so adjacent intervals MEET)."""
+    new fact's validity boundary (half-open, so adjacent intervals MEET). Closing
+    never extends it: a fact that already ended by then keeps its own end."""
+    if old.end is not None and old.hi <= new_start.lo:
+        return old
     return Interval(start=old.start, end=new_start, closed=True)

@@ -222,3 +222,89 @@ def test_score_threshold_and_skip():
         assert {r["record"].id async for r in skipped} in ({"b"}, {"c"})
 
     asyncio.run(_run())
+
+
+@vectorstoremodel(collection_name="notes")
+@dataclass
+class NoteRecord:
+    id: Annotated[str, VectorStoreField(field_type="key", type_="str")] = ""
+    embedding: Annotated[list[float], VectorStoreField(field_type="vector", type_="float", dimensions=DIMS)] = field(
+        default_factory=list
+    )
+    title: Annotated[list[float], VectorStoreField(field_type="vector", type_="float", dimensions=DIMS)] = field(
+        default_factory=list
+    )
+    text: Annotated[str | None, VectorStoreField(field_type="data")] = None
+
+
+def test_keys_are_scoped_to_their_collection():
+    async def _run():
+        store = _store()
+        memories = store.get_collection(MemoryRecord)
+        notes = store.get_collection(NoteRecord)
+        await memories.ensure_collection_exists()
+        await notes.ensure_collection_exists()
+        await memories.upsert([MemoryRecord(id="a", embedding=_vec(0.0), text="memory")], generate_vectors=False)
+        await notes.upsert(
+            [NoteRecord(id="a", embedding=_vec(0.1), title=_vec(0.2), text="note")], generate_vectors=False
+        )
+        assert [r.text for r in await memories.get(["a"])] == ["memory"]
+        assert [r.text for r in await notes.get(["a"])] == ["note"]
+        await notes.delete(["a"])
+        assert [r.text for r in await memories.get(["a"])] == ["memory"]
+
+    asyncio.run(_run())
+
+
+def test_collection_names_do_not_collide():
+    assert label_for("a-b") != label_for("a_b")
+
+    async def _run():
+        store = _store()
+        for name in ("a-b", "a_b"):
+            collection = store.get_collection(MemoryRecord, collection_name=name)
+            await collection.ensure_collection_exists()
+            await collection.upsert([MemoryRecord(id=name, embedding=_vec(0.0), text=name)], generate_vectors=False)
+        assert {"a-b", "a_b"} <= set(await store.list_collection_names())
+        only = store.get_collection(MemoryRecord, collection_name="a-b")
+        assert [r.id for r in await only.get(top=10)] == ["a-b"]
+
+    asyncio.run(_run())
+
+
+def test_conflicting_and_filter_matches_nothing():
+    async def _run():
+        store = _store()
+        collection = store.get_collection(MemoryRecord)
+        await collection.ensure_collection_exists()
+        await collection.upsert(
+            [MemoryRecord(id="b", embedding=_vec(0.1), text="y", kind="hobby")], generate_vectors=False
+        )
+        group = FilterGroup("and", (Filter("kind", "eq", "fact"), Filter("kind", "eq", "hobby")))
+        assert [r async for r in await collection.search(vector=_vec(0.0), top=5, filter=group)] == []
+        assert await collection.get(filter=group, top=5) == []
+
+    asyncio.run(_run())
+
+
+def test_upsert_replaces_a_field_set_to_none_and_indexes_every_vector_field():
+    async def _run():
+        store = _store()
+        notes = store.get_collection(NoteRecord)
+        await notes.ensure_collection_exists()
+        names = [i["name"] for i in store.db.memory_usage()["indexes"]["vector_indexes"]]
+        label = label_for("notes")
+        assert {f"{label}:embedding", f"{label}:title"} <= set(names)
+
+        await notes.upsert(
+            [NoteRecord(id="n", embedding=_vec(0.0), title=_vec(0.5), text="v1")], generate_vectors=False
+        )
+        await notes.upsert(
+            [NoteRecord(id="n", embedding=_vec(0.0), title=_vec(0.5), text=None)], generate_vectors=False
+        )
+        assert [r.text for r in await notes.get(["n"])] == [None]
+
+        hits = await notes.search(vector=_vec(0.5), top=1, vector_property_name="title")
+        assert [r["record"].id async for r in hits] == ["n"]
+
+    asyncio.run(_run())

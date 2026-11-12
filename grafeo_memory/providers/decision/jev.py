@@ -32,6 +32,12 @@ DEFAULT_MODEL = "jev-latest"
 _CIRCUIT_STATUSES = {401, 402, 403}
 
 
+def _sum_usage(a: dict | None, b: dict | None) -> dict | None:
+    if a is None or b is None:
+        return a or b
+    return {k: int(a.get(k, 0) or 0) + int(b.get(k, 0) or 0) for k in ("prompt_tokens", "completion_tokens")}
+
+
 class JevDecisionModel:
     """DecisionModel backed by the TypeSafe Jev API."""
 
@@ -122,7 +128,11 @@ class JevDecisionModel:
         if not questions:
             return []
         payload = self._build_payload(state, questions)
+        # The default endpoint keeps its plain key, so existing cached answers stay valid.
         cache_key_model = f"jev:{self.model}"
+        if self.base_url != DEFAULT_BASE_URL:
+            cache_key_model += f"@{self.base_url}"
+        self.last_usage = None  # a cache hit or a failure costs no tokens
         if self.cache is not None:
             hit = self.cache.get("decision", cache_key_model, payload)
             if hit is not None:
@@ -156,7 +166,9 @@ class JevDecisionModel:
                             len(questions) - mid,
                         )
                         first = await self.decide_async(state, questions[:mid])
+                        first_usage = self.last_usage
                         second = await self.decide_async(state, questions[mid:])
+                        self.last_usage = _sum_usage(first_usage, self.last_usage)
                         return list(first) + list(second)
                     # Single question still too big: shrink the state and retry.
                     state = state[: max(len(state) // 2, 1000)] + "\n... [truncated to fit context]"
@@ -198,7 +210,10 @@ class JevDecisionModel:
             except Exception as e:
                 last_exc = e
                 status = getattr(getattr(e, "response", None), "status_code", None)
-                transient = status == 429 or "Timeout" in type(e).__name__ or "Connect" in type(e).__name__
+                server_error = status is not None and 500 <= status < 600
+                transient = (
+                    status == 429 or server_error or "Timeout" in type(e).__name__ or "Connect" in type(e).__name__
+                )
                 if transient and attempt < self.max_retries - 1:
                     await asyncio.sleep(min(2**attempt, 30))
                     continue

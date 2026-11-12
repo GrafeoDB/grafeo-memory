@@ -119,11 +119,12 @@ def validate_relation(rel: RelationType | str, subject_type: EntityType | str, o
 def is_violation(rel: str, subject_type: str, object_type: str) -> bool:
     """True only when ``rel`` is in the controlled vocabulary AND both endpoint
     types are known AND the domain/range constraint is violated. Unknown
-    vocabulary (free-text relation types from extraction, unmapped entity types)
-    is NOT a violation, pass-through baseline behavior, never a crash."""
+    vocabulary (free-text relation types from extraction, unmapped entity types,
+    and ``Other``, the catch-all for unclassified entities) is NOT a violation,
+    pass-through baseline behavior, never a crash."""
     rt = coerce_relation_type(rel)
     s, o = coerce_entity_type(subject_type), coerce_entity_type(object_type)
-    if rt is None or s is None or o is None:
+    if rt is None or s in (None, EntityType.OTHER) or o in (None, EntityType.OTHER):
         return False
     spec = relation_spec(rt)
     return not (s in spec.domain and o in spec.range)
