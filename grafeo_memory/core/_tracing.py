@@ -13,7 +13,7 @@ def trace_operation(
     *,
     enabled: bool = False,
     attributes: dict[str, Any] | None = None,
-) -> Generator[Any, None, None]:
+) -> Generator[Any]:
     """Context manager that creates an OTel span when enabled, or no-ops.
 
     Zero overhead when ``enabled=False``, the opentelemetry import is deferred.

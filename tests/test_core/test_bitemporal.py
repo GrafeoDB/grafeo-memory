@@ -62,7 +62,7 @@ class TestParseDateToEpochMs:
     def test_empty_string_returns_none(self):
         assert _parse_date_to_epoch_ms("") is None
 
-    def test_unparseable_returns_none(self):
+    def test_unparsable_returns_none(self):
         assert _parse_date_to_epoch_ms("not a date") is None
 
     def test_whitespace_stripped(self):

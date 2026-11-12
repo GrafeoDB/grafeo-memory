@@ -2,6 +2,22 @@
 
 All notable changes to grafeo-memory, an embedded AI memory layer on GrafeoDB.
 
+## [0.3.1] - Unreleased
+
+Maintenance release: Python 3.13 is the minimum, and the LLM call cache keeps its newest entries when it reloads on Windows.
+
+### Changed
+
+- **CI**: tests Python 3.13 to 3.15 on Linux and Windows, and a failing job no longer cancels the others.
+
+### Removed
+
+- **Python 3.12**: grafeo-memory 0.3.1 requires Python 3.13 or later (`requires-python = ">=3.13"`). On Python 3.12, stay on 0.3.0.
+
+### Fixed
+
+- **The call cache could drop its newest entries on reload**: writes within one clock tick, common on Windows, shared a timestamp, so reloading a cache file larger than `max_entries` or `max_memory_bytes` kept an arbitrary subset instead of the newest. Each write now gets a strictly increasing timestamp; the effect was extra provider calls, never a wrong answer.
+
 ## [0.3.0] - 2026-11-12
 
 Engine and architecture release: grafeo-memory runs on grafeo 0.6.2, its modules move into layers, and each reconciliation stage can run on the LLM, a decision model, or both. Before upgrading: the first open of a grafeo 0.5 database migrates it one way (the old copy stays as `<path>.pre-0.6`), every `db_path` is a single file, and pre-0.3 module paths still import but warn until 0.7. Every new toggle and layer is off by default, which keeps the 0.2 pipeline; the release also carries 0.2.3, which never shipped on its own.

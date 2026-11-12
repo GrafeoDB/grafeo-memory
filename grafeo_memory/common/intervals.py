@@ -162,28 +162,28 @@ _ALLEN_INVERSE: dict[Allen, Allen] = {
 
 def allen(a: Interval, b: Interval) -> Allen:
     """The single Allen relation holding between half-open intervals a and b."""
-    alo, ahi, blo, bhi = a.lo, a.hi, b.lo, b.hi
-    if alo == blo and ahi == bhi:
+    also, ahi, blo, bhi = a.lo, a.hi, b.lo, b.hi
+    if also == blo and ahi == bhi:
         return Allen.EQUALS
     if ahi <= blo:
         return Allen.MEETS if ahi == blo else Allen.BEFORE
-    if bhi <= alo:
-        return Allen.MET_BY if bhi == alo else Allen.AFTER
-    if alo < blo < ahi < bhi:
+    if bhi <= also:
+        return Allen.MET_BY if bhi == also else Allen.AFTER
+    if also < blo < ahi < bhi:
         return Allen.OVERLAPS
-    if blo < alo < bhi < ahi:
+    if blo < also < bhi < ahi:
         return Allen.OVERLAPPED_BY
-    if alo == blo and ahi < bhi:
+    if also == blo and ahi < bhi:
         return Allen.STARTS
-    if alo == blo and bhi < ahi:
+    if also == blo and bhi < ahi:
         return Allen.STARTED_BY
-    if blo < alo and ahi < bhi:
+    if blo < also and ahi < bhi:
         return Allen.DURING
-    if alo < blo and bhi < ahi:
+    if also < blo and bhi < ahi:
         return Allen.CONTAINS
-    if ahi == bhi and blo < alo:
+    if ahi == bhi and blo < also:
         return Allen.FINISHES
-    if ahi == bhi and alo < blo:
+    if ahi == bhi and also < blo:
         return Allen.FINISHED_BY
     raise AssertionError(f"uncovered interval pair: {a} vs {b}")  # pragma: no cover
 

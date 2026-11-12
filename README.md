@@ -536,7 +536,7 @@ All packages share the same database file. Build memories with grafeo-memory, qu
 
 ## Requirements
 
-- Python 3.12+
+- Python 3.13+
 - [grafeo](https://pypi.org/project/grafeo/) `>=0.6.2,<0.7` (installed automatically)
 
 ## License

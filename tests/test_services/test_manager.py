@@ -1661,7 +1661,7 @@ class TestHistoryOrdering:
             manager.update(memory_id, new_text)
 
         history = manager.history(memory_id)
-        # Should have ADD + 3 UPDATEs = 4 entries
+        # Should have ADD + 3 UPDATEEs = 4 entries
         assert len(history) >= 4
         # Timestamps should be non-decreasing
         for i in range(1, len(history)):
@@ -1671,7 +1671,7 @@ class TestHistoryOrdering:
         manager.close()
 
     def test_history_preserves_old_and_new_text(self):
-        """History entries should record old_text and new_text for UPDATEs."""
+        """History entries should record old_text and new_text for UPDATEEs."""
         manager = _make_manager(
             [
                 {"facts": ["fact v1"], "entities": [], "relations": []},
