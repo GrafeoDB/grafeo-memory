@@ -1,9 +1,9 @@
 """Architecture gate: enforce the layer DAG on ALL import styles.
 
-Each layer directory ships a ruff.toml whose banned-api table fails lint on
-absolute imports of higher layers. This test additionally resolves relative
-imports via the AST and applies the same ban tables, read from the ruff.toml
-files themselves, so there is a single source of truth.
+Each layer directory ships a ruff.toml whose banned-api table (TID251) fails
+lint on imports of higher layers. This test applies the same ban tables, read
+from the ruff.toml files themselves, to every module via the AST: each file is
+checked against its nearest ruff.toml, the same lookup ruff uses.
 
 Layer DAG (docs/architecture.md):
     common/ < providers/ < core/ < services/ < cli/, mcp/, agent_framework.py
@@ -31,6 +31,7 @@ LAYER_DIRS = [
     "core/reconciliation",
     "core/search",
     "core/ontology",
+    "core/policy",
     "services",
     "bench",
     ".",  # package root (__init__, shims, agent_framework)
@@ -62,26 +63,52 @@ def test_layer_has_ruff_toml(layer: str):
     assert _banned_for(layer), f"grafeo_memory/{layer}/ruff.toml has an empty ban table"
 
 
+def _is_banned(target: str, banned: set[str]) -> bool:
+    return any(target == b or target.startswith(b + ".") for b in banned)
+
+
+def _layer_of(py: Path) -> str:
+    """The directory of the nearest ruff.toml, relative to the package (ruff's own lookup)."""
+    for parent in py.parents:
+        if (parent / "ruff.toml").exists():
+            return parent.relative_to(PKG).as_posix() if parent != PKG else "."
+        if parent == PKG:
+            break
+    raise AssertionError(f"{py} has no ruff.toml above it")
+
+
+def _modules_of(layer: str) -> list[Path]:
+    return [py for py in sorted(PKG.rglob("*.py")) if _layer_of(py) == layer]
+
+
+def test_every_module_is_in_a_listed_layer():
+    unlisted = {_layer_of(py) for py in PKG.rglob("*.py")} - set(LAYER_DIRS)
+    assert not unlisted, f"ruff.toml layers missing from LAYER_DIRS: {sorted(unlisted)}"
+
+
 @pytest.mark.parametrize("layer", LAYER_DIRS)
 def test_layer_imports_respect_dag(layer: str):
     banned = _banned_for(layer)
     violations: list[str] = []
-    for py in sorted((PKG / layer).glob("*.py")):
-        if py.name == "ruff.toml":
-            continue
-        tree = ast.parse(py.read_text())
+    for py in _modules_of(layer):
+        tree = ast.parse(py.read_text(encoding="utf-8"))
         importer = _module_of(py)
+        name = py.relative_to(PKG).as_posix()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    target = alias.name
-                    if any(target == b or target.startswith(b + ".") for b in banned):
-                        violations.append(f"{py.name}: import {target}")
+                    if _is_banned(alias.name, banned):
+                        violations.append(f"{name}: import {alias.name}")
             elif isinstance(node, ast.ImportFrom):
                 target = _resolve_relative(node.level, node.module, importer) if node.level > 0 else node.module or ""
-                if any(target == b or target.startswith(b + ".") for b in banned):
-                    mod = "." * node.level + (node.module or "")
-                    violations.append(f"{py.name}: from {mod} import ... -> {target}")
+                mod = "." * node.level + (node.module or "")
+                if _is_banned(target, banned):
+                    violations.append(f"{name}: from {mod} import ... -> {target}")
+                    continue
+                # `from grafeo_memory import services` imports a banned subpackage as a member
+                for alias in node.names:
+                    if _is_banned(f"{target}.{alias.name}", banned):
+                        violations.append(f"{name}: from {mod} import {alias.name} -> {target}.{alias.name}")
     assert not violations, f"layer {layer} violates the DAG:\n" + "\n".join(violations)
 
 

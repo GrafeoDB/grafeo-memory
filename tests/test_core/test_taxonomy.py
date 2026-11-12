@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from grafeo_memory.core.taxonomy import DEFAULT_ROOTS, InstanceScopeConfig, Taxonomy, TaxonomyConfig
 
 
@@ -141,3 +143,28 @@ class TestRootEditingAndRouting:
         t.retire_root("work", fallback="general")
         assert "work" not in t.route_subject("work stuff")
         assert "work" not in t.scheme._children.get(None, [])
+
+    def test_add_root_rejects_an_existing_id(self):
+        t = _tax()
+        t.add_root("work", "Work stuff")
+        with pytest.raises(ValueError):
+            t.add_root("work", "Other label")
+        assert t.scheme.concepts["work"].pref_label == "Work stuff"
+        assert t.scheme._children[None].count("work") == 1 and t.version == 1
+
+    def test_retire_root_rejects_a_bad_fallback(self):
+        t = _tax()
+        t.add_root("work", "Work stuff")
+        t.add_child("work", "work.apollo", "Apollo")
+        for fallback in ("work", "missing", "work.apollo"):
+            with pytest.raises(ValueError):
+                t.retire_root("work", fallback=fallback)
+        with pytest.raises(ValueError):
+            t.retire_root("general")  # default fallback is general itself
+        assert "work" in t.scheme.concepts and t.version == 1  # nothing changed
+
+    def test_scorer_expansion_does_not_repeat_lexical_hits(self):
+        t = _tax(max_scopes_per_query=10)
+        t.add_child("career", "career.apollo", "Apollo")
+        paths = t.route_subject("apollo update", scorer=lambda q, ids: [(0.9, "career")])
+        assert len(paths) == len(set(paths)) and set(paths) >= {"career", "career.apollo"}

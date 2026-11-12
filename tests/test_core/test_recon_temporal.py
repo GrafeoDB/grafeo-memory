@@ -31,10 +31,21 @@ class TestExtractInterval:
         assert iv is not None and iv.lo.year == 1995 and iv.hi.year == 1996
 
     def test_decade_and_fuzzy(self):
-        assert extract_interval("grew up in the 1990s") is not None
-        assert extract_interval("in the early 2020s") is not None
-        assert extract_interval("circa 1995") is not None
-        assert extract_interval("around 1995?") is not None
+        cases = {
+            "grew up in the 1990s": (1990, 2000),
+            "in the early 2020s": (2020, 2023),
+            "circa 1995": (1995, 1996),
+            "around 1995?": (1995, 1996),
+        }
+        for text, (lo, hi) in cases.items():
+            iv = extract_interval(text)
+            assert iv is not None and (iv.lo.year, iv.hi.year) == (lo, hi), text
+
+    def test_before_and_after_are_bounds_not_points(self):
+        before = extract_interval("lived in Berlin before 2020")
+        assert before is not None and before.start is None and before.hi.year == 2020
+        after = extract_interval("moved to Paris after 2020")
+        assert after is not None and after.lo.year == 2020 and after.end is None
 
     def test_multiple_dates_span(self):
         iv = extract_interval("worked at Acme from 2020-01-01 to 2022-06-01")
@@ -77,6 +88,12 @@ class TestCloseOnSupersede:
         from grafeo_memory.common.intervals import Allen, allen
 
         assert allen(closed, _iv("2022-06-01", None)) == Allen.MEETS
+
+    def test_closing_never_extends_an_earlier_end(self):
+        old = Interval(start=parse_iso("2018-01-01"), end=parse_iso("2019-01-01"), closed=True)
+        new_start = parse_iso("2022-06-01")
+        assert new_start is not None
+        assert close_interval_on_supersede(old, new_start).hi.year == 2019
 
 
 class TestTemporalPrecheckWiring:
@@ -159,6 +176,35 @@ class TestTemporalPrecheckWiring:
         prompt = seen_prompts[0]
         assert "ID 7" in prompt  # contested candidate present
         assert "ID 9" not in prompt  # cleared candidate filtered out
+
+    def test_each_fact_sees_only_its_own_contested_candidates(self):
+        from pydantic_ai.messages import ModelResponse, ToolCallPart
+        from pydantic_ai.models.function import FunctionModel
+
+        from grafeo_memory.common.types import Fact
+        from grafeo_memory.core.reconciliation import reconcile
+
+        seen_prompts: list[str] = []
+
+        def handler(messages, info):
+            seen_prompts.append(
+                " ".join(str(part.content) for m in messages for part in m.parts if hasattr(part, "content"))
+            )
+            decision = {"action": "NONE", "text": "x"}
+            return ModelResponse(
+                parts=[ToolCallPart(tool_name=info.output_tools[0].name, args={"decisions": [decision]})]
+            )
+
+        facts = [Fact("Alice works at Beta since 2022-01-01."), Fact("Alice was born 1990-05-05.")]
+        existing = [
+            {"id": "7", "text": "Alice works at Acme from 2020-01-01 to 2022-06-01.", "score": 0.9},
+            {"id": "9", "text": "Alice was born 1990-05-05.", "score": 0.4},
+        ]
+        decisions = reconcile(FunctionModel(function=handler), facts, existing, temporal_precheck=True)
+        assert len(decisions) == 2 and len(seen_prompts) == 2  # one call per distinct contested set
+        by_fact = {("Beta" in p): p for p in seen_prompts}
+        assert "ID 7" in by_fact[True] and "ID 9" not in by_fact[True]
+        assert "ID 9" in by_fact[False] and "ID 7" not in by_fact[False]
 
     def test_off_by_default_preserves_baseline(self):
         from mock_llm import make_test_model

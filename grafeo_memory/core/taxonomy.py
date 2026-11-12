@@ -12,56 +12,28 @@ with an optional engine callback for the residue. Scopes are soft by default.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from grafeo_memory.common.types import (
+    DEFAULT_ROOTS,
+    GrowthConfig,
+    InstanceScopeConfig,
+    RootSpec,
+    TaxonomyConfig,
+)
 from grafeo_memory.core.ontology.scheme import Concept, ConceptScheme, normalize_key
 
-
-@dataclass(frozen=True)
-class RootSpec:
-    id: str
-    label: str
-    status: str = "shipped"  # shipped | user | certified
-
-
-DEFAULT_ROOTS: tuple[RootSpec, ...] = (
-    RootSpec("general", "General"),
-    RootSpec("career", "Career & work"),
-    RootSpec("technology", "Technology & tools"),
-    RootSpec("skills", "Skills & learning"),
-    RootSpec("projects", "Projects & goals"),
-    RootSpec("health", "Health & wellness"),
-    RootSpec("finance", "Finance & legal"),
-    RootSpec("relationships", "Relationships & social"),
-    RootSpec("home", "Home & daily life"),
-    RootSpec("interests", "Interests & leisure"),
-)
-
-
-@dataclass
-class GrowthConfig:
-    min_cluster_size: int = 8
-    depth_cap: int = 4
-    merge_similarity: float = 0.9
-    demote_ttl_days: int = 30
-    min_fact_count: int = 3
-
-
-@dataclass
-class InstanceScopeConfig:
-    prominence_threshold: int = 5  # mentions+edges before an entity becomes a scope
-    hard_default: bool = False
-
-
-@dataclass
-class TaxonomyConfig:
-    enabled: bool = False  # default off: single general scope = today's behavior
-    roots: tuple[RootSpec, ...] = DEFAULT_ROOTS
-    growth: GrowthConfig = field(default_factory=GrowthConfig)
-    instance_scopes: InstanceScopeConfig = field(default_factory=InstanceScopeConfig)
-    router_threshold: float = 0.5
-    max_scopes_per_query: int = 4
+__all__ = [
+    "DEFAULT_ROOTS",
+    "GrowthConfig",
+    "InstanceScopeConfig",
+    "RootSpec",
+    "ScopeSet",
+    "Taxonomy",
+    "TaxonomyConfig",
+]
 
 
 @dataclass
@@ -100,13 +72,54 @@ class Taxonomy:
             self._add_root(root)
 
     def _add_root(self, root: RootSpec) -> Concept:
-        c = self.scheme.add_concept(root.id, root.label, "Scope", broader=None)
+        c = self.scheme.add_concept(root.id, root.label, "Scope", alt_labels=root.keywords, broader=None)
         self.status[root.id] = root.status
         return c
+
+    def add_child(
+        self,
+        parent: str,
+        id: str,
+        label: str,
+        alt_labels: tuple[str, ...] | list[str] = (),
+        status: str = "provisional",
+    ) -> Concept:
+        """A generated (or user) concept under ``parent``; its labels route like a root's."""
+        c = self.scheme.add_concept(id, label, "Scope", alt_labels=tuple(alt_labels), broader=parent)
+        self.status[id] = status
+        return c
+
+    def remove_concept(self, id: str) -> None:
+        """Drop a generated concept (compile regenerates children; roots are retired, not removed)."""
+        if self.scheme.remove_concept(id) is None:
+            return
+        self.scheme._children.pop(id, None)
+        self.status.pop(id, None)
+
+    def root_of(self, cid: str) -> str:
+        path = self.scheme.broader_path(cid)
+        return path[-1] if path else cid
+
+    # -- write path: subject tags for a fact (deterministic) ----
+
+    def tag(self, text: str, scorer: Scorer | None = None) -> list[str]:
+        """Subject-path tags for a stored fact: the deepest lexical matches, else the
+        scorer's best root above the threshold, else ``general``."""
+        hits = self.scheme.alias_hits(text)
+        hits.discard("general")
+        # keep the deepest hits: a child hit makes its ancestors redundant
+        deep = sorted(h for h in hits if not any(h in self.scheme.broader_path(o) for o in hits if o != h))
+        if not deep and scorer is not None:
+            scored = sorted(scorer(text, [c for c in self.scheme.concepts if c != "general"]), reverse=True)
+            if scored and scored[0][0] >= self.config.router_threshold:
+                deep = [scored[0][1]]
+        return deep or ["general"]
 
     # -- root scheme editing (config / set_root_scheme / MCP all land here) ----
 
     def add_root(self, id: str, label: str, status: str = "user") -> Concept:
+        if id in self.scheme.concepts:
+            raise ValueError(f"concept {id!r} already exists")
         c = self.scheme.add_concept(id, label, "Scope")
         self.status[id] = status
         self.version += 1
@@ -118,19 +131,18 @@ class Taxonomy:
         altLabel (dual-label grace period), so tags and queries using it keep working."""
         c = self.scheme.concepts[id]
         alt = c.alt_labels if c.pref_label in c.alt_labels else (*c.alt_labels, c.pref_label)
-        self.scheme.concepts[id] = Concept(
-            id=c.id,
-            pref_label=label,
-            entity_type=c.entity_type,
-            alt_labels=alt,
-            notation=c.notation,
-            broader=c.broader,
-            related=c.related,
-            exact_match=c.exact_match,
+        self.scheme.put(
+            Concept(
+                id=c.id,
+                pref_label=label,
+                entity_type=c.entity_type,
+                alt_labels=alt,
+                notation=c.notation,
+                broader=c.broader,
+                related=c.related,
+                exact_match=c.exact_match,
+            )
         )
-        self.scheme._pref_index.pop((c.pref_label, c.entity_type), None)
-        self.scheme._pref_index[(label, c.entity_type)] = id
-        self.scheme._alias_index.setdefault(normalize_key(label), id)
         self.version += 1
         self.history.append({"v": self.version, "op": "rename_root", "id": id, "label": label})
 
@@ -140,27 +152,29 @@ class Taxonomy:
         is recorded (routed to the open-decisions bucket)."""
         if id not in self.scheme.concepts:
             raise KeyError(id)
+        # the fallback must outlive the retired subtree, or migrated children dangle or loop
+        if (
+            fallback not in self.scheme.concepts
+            or fallback == id
+            or fallback in self.scheme.narrower(id, len(self.scheme.concepts))
+        ):
+            raise ValueError(f"fallback {fallback!r} must be an existing concept outside the subtree of {id!r}")
         migrated = list(self.scheme._children.get(id, ()))  # direct children move; their subtrees follow
-        retired = self.scheme.concepts.pop(id)
-        self.scheme._pref_index.pop((retired.pref_label, retired.entity_type), None)
-        for alias in [a for a, cid in self.scheme._alias_index.items() if cid == id]:
-            del self.scheme._alias_index[alias]
-        for siblings in self.scheme._children.values():
-            if id in siblings:
-                siblings.remove(id)
+        self.scheme.remove_concept(id)
         for cid in migrated:
             c = self.scheme.concepts[cid]
-            self.scheme.concepts[cid] = Concept(
-                id=c.id,
-                pref_label=c.pref_label,
-                entity_type=c.entity_type,
-                alt_labels=c.alt_labels,
-                notation=c.notation,
-                broader=fallback if cid != fallback else None,
-                related=c.related,
-                exact_match=c.exact_match,
+            self.scheme.put(
+                Concept(
+                    id=c.id,
+                    pref_label=c.pref_label,
+                    entity_type=c.entity_type,
+                    alt_labels=c.alt_labels,
+                    notation=c.notation,
+                    broader=fallback,
+                    related=c.related,
+                    exact_match=c.exact_match,
+                )
             )
-        self.scheme._children.setdefault(fallback, []).extend(migrated)
         self.scheme._children.pop(id, None)
         self.status.pop(id, None)
         self.version += 1
@@ -203,16 +217,15 @@ class Taxonomy:
         residue parent-first (children only when the parent clears router_threshold)."""
         if not self.config.enabled:
             return ["general"]
-        qn = f" {normalize_key(query)} "
         # whole words only: "homework" does not route to "home"
-        hits = {cid for alias, cid in self.scheme._alias_index.items() if alias and f" {alias} " in qn}
+        hits = self.scheme.alias_hits(query)
         paths = self.scheme.expand(sorted(hits), depth=1, direction="down") if hits else []
         if scorer is not None and len(paths) < self.config.max_scopes_per_query:
             remaining = [cid for cid in self.scheme.concepts if cid not in paths]
             scored = scorer(query, remaining)
             for score, cid in sorted(scored, reverse=True):
                 if score >= self.config.router_threshold and len(paths) < self.config.max_scopes_per_query:
-                    paths.extend(self.scheme.expand([cid], depth=1, direction="down"))
+                    paths.extend(d for d in self.scheme.expand([cid], depth=1, direction="down") if d not in paths)
                 elif score < self.config.router_threshold:
                     break
         if not paths:
@@ -229,6 +242,24 @@ class Taxonomy:
         qn = f" {normalize_key(query)} "
         instances = [e for e in self.active_instance_scopes() if f" {normalize_key(e)} " in qn]
         return ScopeSet(subject_paths=subjects, instance_scopes=instances)
+
+    def set_prominence(self, counts: dict[str, int]) -> None:
+        self._prominence = dict(counts)
+
+    @classmethod
+    def from_dict(cls, d: dict, config: TaxonomyConfig | None = None) -> Taxonomy:
+        t = cls(config)
+        if d.get("scheme"):
+            t.scheme = ConceptScheme.from_dict(d["scheme"])
+        t.status.update(d.get("status", {}))
+        t.version = int(d.get("version", 0))
+        t.history = list(d.get("history", []))
+        t._prominence = dict(d.get("prominence", {}))
+        t._hard = set(d.get("hard", []))
+        return t
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict())
 
     def to_dict(self) -> dict:
         return {

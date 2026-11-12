@@ -31,6 +31,35 @@ def _scheme() -> ConceptScheme:
 
 
 class TestScheme:
+    def test_label_without_ascii_key_is_not_an_alias(self):
+        s = ConceptScheme()
+        s.add_concept("tokyo", "東京", EntityType.LOCATION)
+        assert s.lookup_alias("北京") is None
+        assert s.lookup_pref("東京", EntityType.LOCATION) == "tokyo"
+
+    def test_shared_alias_resolves_per_type(self):
+        s = ConceptScheme()
+        s.add_concept("apple_inc", "Apple", EntityType.ORGANIZATION)
+        s.add_concept("apple_fruit", "apple", EntityType.PREFERENCE)
+        assert s.lookup_alias("APPLE", EntityType.PREFERENCE) == "apple_fruit"
+        assert s.lookup_alias("APPLE", EntityType.ORGANIZATION) == "apple_inc"
+        assert s.lookup_alias("APPLE") == "apple_inc"
+
+    def test_readding_an_id_replaces_its_index_entries(self):
+        s = _scheme()
+        s.add_concept("ts", "Deno", EntityType.TECHNOLOGY, broader="js")
+        assert s.lookup_pref("TypeScript", EntityType.TECHNOLOGY) is None
+        assert s.lookup_alias("TS") == "ts" and s.lookup_alias("typescript") is None
+        assert s.narrower("js") == ["ts"] and "ts" not in s._children[None]
+
+    def test_expand_up_respects_depth(self):
+        s = _scheme()
+        s.add_concept("career.interviewing.mock", "Mock interviews", EntityType.CONCEPT, broader="career.interviewing")
+        assert s.expand(["career.interviewing.mock"], depth=1, direction="up") == [
+            "career.interviewing.mock",
+            "career.interviewing",
+        ]
+
     def test_rung1_exact_pref_typed(self):
         s = _scheme()
         assert s.lookup_pref("JavaScript", "Technology") == "js"
@@ -128,10 +157,12 @@ class TestNormalizationLadder:
         )
         assert r.rung == 4 and not r.resolved and set(r.candidates) == {"js", "ts"}
 
-    def test_rung4_without_embedder(self):
+    def test_rung4_without_embedder_ranks_by_label_similarity(self):
         s = _scheme()
-        r = normalize("something new", EntityType.TECHNOLOGY, s)
-        assert r.rung == 4 and r.candidates == ["js", "ts"]
+        r = normalize("typescrpt", EntityType.TECHNOLOGY, s)
+        assert r.rung == 4 and r.candidates == ["ts", "js"]
+        # the cap applies after ranking: the closest label is offered even when added last
+        assert normalize("typescrpt", EntityType.TECHNOLOGY, s, max_candidates=1).candidates == ["ts"]
 
     def test_cosine(self):
         assert cosine([1, 0], [1, 0]) == 1.0
@@ -185,6 +216,12 @@ class TestIsViolation:
         assert is_violation("LIVES_IN", "Person", "Organization")
         assert not is_violation("WORKS_AT", "Person", "Organization")
         assert not is_violation("PREFERS", "Person", "Location")
+
+    def test_other_entity_type_is_not_a_violation(self):
+        from grafeo_memory.core.ontology import is_violation
+
+        assert not is_violation("WORKS_AT", "Person", "Other")
+        assert not is_violation("WORKS_AT", "Other", "Organization")
 
     def test_free_text_relation_is_not_a_violation(self):
         from grafeo_memory.core.ontology import is_violation

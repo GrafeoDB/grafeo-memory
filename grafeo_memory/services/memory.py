@@ -26,6 +26,7 @@ from grafeo_memory.common.types import (
     RELATION_EDGE,
     SUPERSEDES_EDGE,
     AddResult,
+    ContextBlock,
     Engine,
     Entity,
     EpisodeResult,
@@ -38,6 +39,7 @@ from grafeo_memory.common.types import (
     MemoryStats,
     MemoryType,
     ModelType,
+    OpenDecision,
     ReconciliationDecision,
     SearchResponse,
     SearchResult,
@@ -83,9 +85,6 @@ class _MemoryCore:
         import grafeo
 
         self._config = config or MemoryConfig()
-        for _flag, _layer in (("taxonomy", "B"), ("policy", "F"), ("bucket", "G")):
-            if getattr(self._config.pipeline, _flag, False):
-                logger.warning("pipeline.%s is on but Layer %s is not implemented yet: no-op", _flag, _layer)
         from grafeo_memory.providers.llm.retry import with_retries
 
         # Transient provider errors retry inside the model, under the cache (only
@@ -166,7 +165,20 @@ class _MemoryCore:
         self._vector_index_ready = False
         self._user_locks: dict[str, asyncio.Lock] = {}
         self._graph_dirty = False
+        # Layer state (A, B, F, G): counters, taxonomy cache, session windows.
+        self._layer_counts: dict[str, int] = {}
+        self._taxonomies: dict = {}
+        self._prominence_cache: dict[str, tuple[int, dict[str, int]]] = {}
+        self._entity_name_cache: dict[str, tuple[int, dict[str, str]]] = {}
+        self._write_version = 0
+        self._windows: dict[str, list[dict]] = {}
+        self._summaries: dict[str, str] = {}
+        self._adds_since_compile = 0
+        self._concept_vectors: dict[str, list[float]] = {}
         self._ensure_indexes()
+        from grafeo_memory.services.schema import ensure_schema
+
+        ensure_schema(self._db)
 
         # OpenTelemetry: instrument all pydantic-ai agents when enabled
         if self._config.instrument:
@@ -265,8 +277,10 @@ class _MemoryCore:
         """Return ``(node_id, properties)`` when ``memory_id`` names a Memory node in this manager's scope.
 
         Anything else (an invalid id, a missing node, a node of another label in
-        a shared database, a memory of another ``graph_name``) gives None, so the
-        public API never modifies or deletes nodes it does not own.
+        a shared database, a memory of another ``graph_name``, ``agent_id`` or
+        ``run_id`` scope) gives None, so the public API never modifies or deletes
+        nodes it does not own. ``user_id`` is not checked: it is a per-call
+        partition (``add(user_id=...)``), and one manager serves every user id.
         """
         try:
             node_id = int(memory_id)
@@ -276,8 +290,10 @@ class _MemoryCore:
         if node is None or MEMORY_LABEL not in node_labels(node):
             return None
         props = _get_props(node)
-        if self._config.graph_name and props.get("graph_name") != self._config.graph_name:
-            return None
+        for key in ("graph_name", "agent_id", "run_id"):
+            scope = getattr(self._config, key)
+            if scope and props.get(key) != scope:
+                return None
         return node_id, props
 
     def _record_history(self, memory_id: str | int, entry: HistoryEntry, user_id: str | None) -> None:
@@ -294,7 +310,7 @@ class _MemoryCore:
             return False
         node_id, props = owned
         try:
-            adopt_legacy_history(self._db, node_id)
+            adopt_legacy_history(self._db, node_id, graph_name=props.get("graph_name"))
         except Exception:
             logger.warning("Could not keep the legacy history of memory %s reachable", node_id, exc_info=True)
         if not detach_delete_node(self._db, node_id):
@@ -341,6 +357,8 @@ class _MemoryCore:
         infer: bool = True,
         importance: float = 1.0,
         memory_type: MemoryType | str = MemoryType.SEMANTIC,
+        scopes: list[str] | None = None,
+        _from_window: bool = False,
     ) -> AddResult:
         on_usage, total = self._make_usage_collector()
         uid = user_id or self._config.user_id
@@ -359,6 +377,28 @@ class _MemoryCore:
             descriptions = await describe_images_async(vision_model, images, _on_usage=on_usage)
             image_text = "\n".join(f"[Image: {d}]" for d in descriptions if d)
             text = f"{text}\n{image_text}" if text else image_text
+
+        cfg = self._config
+        trigger_events: list[MemoryEvent] = []
+        if infer and not _from_window:
+            # Layer A: the working window keeps the raw turns; deferred extraction stops here.
+            if cfg.tiers.working.enabled:
+                from grafeo_memory.services import tiers
+
+                await tiers.buffer(self, uid, sid, list(parsed), on_usage)
+                if cfg.tiers.working.defer_extraction:
+                    return AddResult(usage=total)
+            if cfg.tiers.procedural.enabled and cfg.tiers.procedural.auto_triggers:
+                from grafeo_memory.services import tiers
+
+                trigger_events = await tiers.auto_instructions(self, uid, list(parsed))
+
+        if not infer and cfg.policy_on:
+            from grafeo_memory.services import policy
+
+            if policy.scrub(self, text) is None:
+                logger.info("policy compliance.secret: raw memory not stored")
+                return AddResult(usage=total)
 
         if not infer:
             events = self._raw_add(
@@ -382,6 +422,7 @@ class _MemoryCore:
                 self._link_session_chain(new_ids, uid, run)
             if events:
                 self._graph_dirty = True
+                await self._after_write(events, [], uid, [], scopes, on_usage)
             return AddResult(events)
 
         # Select prompt based on memory type
@@ -397,8 +438,16 @@ class _MemoryCore:
             memory_type=mtype.value,
             _on_usage=on_usage,
         )
+        # Layer F rung 1 before any engine: facts a pre rule rejects never reach
+        # reconciliation or storage (compliance pack: credentials, card numbers, ...).
+        if cfg.policy_on and extraction.facts:
+            from grafeo_memory.services import policy
+
+            keep, _rejected = policy.pre_filter(self, extraction.facts)
+            if len(keep) != len(extraction.facts):
+                extraction.facts = [extraction.facts[i] for i in keep]
         if not extraction.facts:
-            return AddResult(usage=total)
+            return AddResult(trigger_events, usage=total)
 
         # Bi-temporal: annotate facts with real-world validity timestamps
         if self._config.bitemporal_on:
@@ -411,7 +460,7 @@ class _MemoryCore:
         # Layer D ontology: deterministic entity normalization (ladder rungs 1-2,
         # zero model calls) before entity nodes are resolved/created.
         if self._config.pipeline.ontology and extraction.entities:
-            self._normalize_entity_names(extraction, uid)
+            await self._normalize_entities_async(extraction, uid, on_usage)
 
         fact_texts = [f.text for f in extraction.facts]
         embeddings = [_as_vector(e) for e in self._embedder.embed(fact_texts)]
@@ -435,6 +484,7 @@ class _MemoryCore:
             logger.debug("Found %d existing memories for reconciliation", len(existing))
 
             mem_stage = self._config.pipeline.memories
+            bucket_on = cfg.bucket_on
             decisions = await reconcile_async(
                 self._model,
                 extraction.facts,
@@ -444,8 +494,17 @@ class _MemoryCore:
                 decision_model=self._decision_model,
                 stage=mem_stage,
                 question_pack=self._config.pipeline.question_pack,
-                temporal_precheck=self._config.pipeline.temporal_precheck,
+                temporal_precheck=self._config.pipeline.temporal_precheck
+                or (cfg.policy_on and "temporal" in cfg.policy.packs),
+                park_floor=cfg.bucket.floor if bucket_on else None,
+                park_actions=tuple(cfg.bucket.park_actions),
             )
+            if cfg.policy_on:
+                from grafeo_memory.services import policy
+
+                decisions = policy.post_apply(self, decisions, role)
+                if "lifecycle" in cfg.policy.packs:
+                    policy.observe(self, decisions, existing)
 
             # Execute the memory mutations (direct writes, one call each). UPDATE and
             # DELETE may only target the candidates the reconciler was shown.
@@ -465,7 +524,9 @@ class _MemoryCore:
                 allowed_targets={str(m["id"]) for m in existing},
                 decision_model=self._decision_model,
                 relations_stage=self._config.pipeline.relations,
+                candidates=existing,
             )
+            await self._after_write(events, decisions, uid, existing, scopes, on_usage)
 
             # Session ordering: episodes or LEADS_TO edges
             run = self._config.run_id or sid
@@ -481,7 +542,55 @@ class _MemoryCore:
                 self._graph_dirty = True
 
         self._check_db_memory_limit()
-        return AddResult(events, usage=total)
+        if cfg.compilation.every_n_adds:
+            self._adds_since_compile += 1
+            if self._adds_since_compile >= cfg.compilation.every_n_adds:
+                self._adds_since_compile = 0
+                try:
+                    await self._compile_async(on_usage)
+                except Exception:
+                    logger.warning("automatic compile failed; the store is unchanged", exc_info=True)
+        return AddResult([*trigger_events, *events], usage=total)
+
+    async def _after_write(
+        self,
+        events: list[MemoryEvent],
+        decisions: list[ReconciliationDecision],
+        uid: str,
+        existing: list[dict],
+        scopes: list[str] | None,
+        on_usage=None,
+    ) -> None:
+        """Layer hooks after the executor: subject tags and pinned scopes (B), rung
+        counts (F), self-resolution of parked questions touched by this write (G)."""
+        cfg = self._config
+        self._write_version += 1
+        new_ids = [e.memory_id for e in events if e.memory_id and e.action in (MemoryAction.ADD, MemoryAction.UPDATE)]
+        if cfg.taxonomy_on and new_ids:
+            from grafeo_memory.services import scoping
+
+            texts = [e.text for e in events if e.memory_id in new_ids]
+            tags = await scoping.tag_texts(self, uid, texts, on_usage)
+            scoping.tag_memories(self, new_ids, tags)
+        if scopes and new_ids:
+            from grafeo_memory.services import scoping
+
+            scoping.pin_scopes(self, uid, new_ids, scopes)
+        if cfg.policy_on or cfg.bucket_on:
+            from grafeo_memory.services import policy
+
+            policy.count_events(self, events, decisions)
+            if cfg.policy_on and new_ids:
+                policy.memory_shapes(self, new_ids)
+        if cfg.bucket_on and cfg.bucket.self_resolution and existing:
+            from grafeo_memory.services import bucket
+
+            parked_now = {e.open_decision_id for e in events if e.open_decision_id}
+            touched = {str(m["id"]) for m in existing}
+            try:
+                await bucket.self_resolve(self, uid, touched, on_usage=on_usage, skip=parked_now)
+            except Exception:
+                logger.warning("bucket: self-resolution failed", exc_info=True)
 
     async def _add_batch(
         self,
@@ -696,6 +805,8 @@ class _MemoryCore:
         include_expired: bool = False,
         diverse: bool = False,
         point_in_time: int | None = None,
+        subjects: list[str] | None = None,
+        scopes: list[str] | None = None,
         _trace: list[ExplainStep] | None = None,
     ) -> SearchResponse:
         from grafeo_memory.core.temporal import detect_temporal_hints
@@ -890,6 +1001,22 @@ class _MemoryCore:
                     )
                 )
 
+        # Layers B, D, E, A, G on the read path (each off unless configured).
+        from grafeo_memory.services.retrieval import needs_layer_pass
+
+        if needs_layer_pass(self) or subjects is not None or scopes is not None:
+            final = self._layer_rescore(
+                query,
+                uid,
+                final,
+                [e.name for e in entities],
+                query_embedding,
+                include_expired,
+                subjects,
+                scopes,
+                _trace,
+            )
+
         # Topology boost: lightweight structural re-ranking (no LLM call)
         if self._config.enable_topology_boost:
             from grafeo_memory.core.scoring import apply_topology_boost
@@ -961,6 +1088,58 @@ class _MemoryCore:
                 _trace.append(ExplainStep(name="temporal_sort", detail={"order": "chronological"}))
 
         return SearchResponse(final[:k], usage=total)
+
+    def _layer_rescore(
+        self,
+        query: str,
+        uid: str,
+        final: list[SearchResult],
+        query_entity_names: list[str],
+        query_embedding: list[float],
+        include_expired: bool,
+        subjects: list[str] | None,
+        scopes: list[str] | None,
+        _trace: list[ExplainStep] | None,
+    ) -> list[SearchResult]:
+        from grafeo_memory.services import retrieval
+
+        cfg = self._config
+        if cfg.retrieval.order == "deterministic":
+            from grafeo_memory.services.scoping import memories_of_entities
+
+            named = retrieval.query_entities(self, uid, query, query_entity_names)
+            expanded = retrieval.expand(self, uid, named, cfg.retrieval.expansion_depth) if named else []
+            members = memories_of_entities(self, uid, expanded)
+            final = retrieval.apply_deterministic(self, uid, final, members, query_embedding, include_expired)
+            if _trace is not None:
+                _trace.append(
+                    ExplainStep(
+                        name="deterministic_first",
+                        detail={"entities": named, "expanded": expanded[:20], "memories": len(members)},
+                    )
+                )
+        props = retrieval.fetch_props(self, [r.memory_id for r in final[:300]])
+        if cfg.taxonomy_on or subjects is not None or scopes is not None:
+            from grafeo_memory.services import scoping
+
+            ss = scoping.route(self, uid, query, query_entity_names, subjects, scopes)
+            final = scoping.apply_scopes(self, uid, final, ss, props)
+            if _trace is not None:
+                _trace.append(
+                    ExplainStep(
+                        name="scope_routing",
+                        detail={
+                            "subjects": ss.subject_paths,
+                            "instances": ss.instance_scopes,
+                            "mode": cfg.taxonomy.mode,
+                            "pinned": subjects is not None or scopes is not None,
+                        },
+                    )
+                )
+        if cfg.retrieval.temporal_filter:
+            final = retrieval.apply_temporal(final, props, query, cfg.retrieval.temporal_boost)
+        final = retrieval.apply_layer_scores(self, final, props)
+        return final
 
     async def _decision_rerank(
         self,
@@ -1051,6 +1230,8 @@ class _MemoryCore:
         include_expired: bool = False,
         diverse: bool = False,
         point_in_time: int | None = None,
+        subjects: list[str] | None = None,
+        scopes: list[str] | None = None,
     ) -> ExplainResult:
         """Run a search with full pipeline tracing."""
         trace: list[ExplainStep] = []
@@ -1064,6 +1245,8 @@ class _MemoryCore:
             include_expired=include_expired,
             diverse=diverse,
             point_in_time=point_in_time,
+            subjects=subjects,
+            scopes=scopes,
             _trace=trace,
         )
 
@@ -1125,12 +1308,24 @@ class _MemoryCore:
         allowed_targets: set[str] | None = None,
         decision_model=None,
         relations_stage=None,
+        candidates: list[dict] | None = None,
     ) -> list[MemoryEvent]:
         events: list[MemoryEvent] = []
         temporal = extraction.temporal_annotations
+        cand_text = {str(c["id"]): str(c.get("text", "")) for c in candidates or []}
+        cand_ids = [str(c["id"]) for c in sorted(candidates or [], key=lambda c: -float(c.get("score", 0.0)))]
+        bucket_on = self._config.bucket_on
+        closing = self._config.ontology.interval_closing
+        slots = _fact_slots(decisions, [f.text for f in extraction.facts])
+
+        def fact_embedding(i: int, text: str) -> list[float] | None:
+            j = slots[i]
+            if j is not None:
+                return embeddings[j] if j < len(embeddings) else None
+            return self._embedder.embed([text])[0]  # no matching fact: embed the decision's own text
 
         for i, decision in enumerate(decisions):
-            fact_valid_at, _ = temporal.get(i, (None, None))
+            fact_valid_at, _ = temporal.get(slots[i], (None, None)) if slots[i] is not None else (None, None)
 
             # An UPDATE or DELETE may only act on a memory the LLM was shown as a
             # candidate. Any other id (hallucinated, injected, another user's or
@@ -1149,8 +1344,38 @@ class _MemoryCore:
                 )
                 decision = replace(decision, target_memory_id=None)
 
+            if decision.parked and bucket_on and decision.action != MemoryAction.ADD:
+                events.append(
+                    self._park_fact(
+                        decision,
+                        fact_embedding(i, decision.text),
+                        user_id,
+                        session_id,
+                        metadata,
+                        timestamp,
+                        actor_id,
+                        role,
+                        importance=importance,
+                        memory_type=memory_type,
+                        valid_at=fact_valid_at,
+                        target_text=cand_text.get(str(decision.target_memory_id))
+                        if decision.target_memory_id
+                        else None,
+                        candidate_ids=cand_ids,
+                        importance_hint=max((float(c.get("score", 0.0)) for c in candidates or []), default=0.5),
+                    )
+                )
+                continue
+
+            if closing and fact_valid_at is None:
+                from grafeo_memory.core.reconciliation.temporal import extract_interval
+
+                iv = extract_interval(decision.text)
+                if iv is not None and iv.start is not None:
+                    fact_valid_at = int(iv.start.lo.timestamp() * 1000)
+
             if decision.action == MemoryAction.ADD:
-                emb = embeddings[i] if i < len(embeddings) else None
+                emb = fact_embedding(i, decision.text)
                 memory_id = self._create_memory(
                     decision.text,
                     emb,
@@ -1182,12 +1407,13 @@ class _MemoryCore:
                         valid_at=fact_valid_at,
                         engine=decision.engine,
                         confidence=decision.confidence,
+                        rung=decision.rung,
                     )
                 )
 
             elif decision.action == MemoryAction.UPDATE and not decision.target_memory_id:
                 logger.warning("UPDATE without target_memory_id, falling back to ADD: %r", decision.text)
-                emb = embeddings[i] if i < len(embeddings) else None
+                emb = fact_embedding(i, decision.text)
                 memory_id = self._create_memory(
                     decision.text,
                     emb,
@@ -1219,6 +1445,7 @@ class _MemoryCore:
                         valid_at=fact_valid_at,
                         engine=decision.engine,
                         confidence=decision.confidence,
+                        rung=decision.rung,
                     )
                 )
 
@@ -1278,6 +1505,7 @@ class _MemoryCore:
                         valid_at=fact_valid_at,
                         engine=decision.engine,
                         confidence=decision.confidence,
+                        rung=decision.rung,
                     )
                 )
 
@@ -1312,6 +1540,14 @@ class _MemoryCore:
 
             elif decision.action == MemoryAction.NONE:
                 continue
+
+        # Provenance on the node (who decided, how sure): read by assemble() and explain.
+        for e in events:
+            if e.memory_id and e.action != MemoryAction.DELETE and (e.confidence is not None or e.engine != "llm"):
+                with contextlib.suppress(Exception):
+                    self._db.set_node_property(int(e.memory_id), "engine", e.engine)
+                    if e.confidence is not None:
+                        self._db.set_node_property(int(e.memory_id), "confidence", float(e.confidence))
 
         memory_node_ids = [e.memory_id for e in events if e.memory_id is not None]
         await self._store_graph(
@@ -1385,6 +1621,76 @@ class _MemoryCore:
 
         return str(node_id)
 
+    def _park_fact(
+        self,
+        decision: ReconciliationDecision,
+        embedding: list[float] | None,
+        user_id: str,
+        session_id: str | None,
+        metadata: dict | None,
+        timestamp: int,
+        actor_id: str | None,
+        role: str | None,
+        *,
+        importance: float,
+        memory_type: MemoryType,
+        valid_at: int | None,
+        target_text: str | None,
+        candidate_ids: list[str],
+        importance_hint: float,
+    ) -> MemoryEvent:
+        """Layer G: store a low-certainty fact provisionally and park the judgment.
+
+        The contested memory is left as it is; the open decision says what the engine
+        proposed and how sure it was, and resolves later (user, new evidence, expiry)."""
+        from grafeo_memory.core.bucket import option_for_action
+        from grafeo_memory.services import bucket
+
+        memory_id = self._create_memory(
+            decision.text,
+            embedding,
+            user_id,
+            session_id,
+            metadata,
+            timestamp,
+            actor_id,
+            role,
+            importance=importance,
+            memory_type=memory_type,
+            valid_at=valid_at,
+        )
+        self._record_history(
+            memory_id,
+            HistoryEntry(event="ADD", new_text=decision.text, timestamp=timestamp, actor_id=actor_id, role=role),
+            user_id,
+        )
+        od_id = bucket.park_memory(
+            self,
+            user_id,
+            new_memory_id=memory_id,
+            new_text=decision.text,
+            proposed=option_for_action(decision.action),
+            target_id=str(decision.target_memory_id) if decision.target_memory_id else None,
+            target_text=target_text,
+            candidate_ids=[c for c in candidate_ids if c != memory_id],
+            confidence=decision.confidence,
+            rung=decision.rung or decision.engine,
+            importance=importance_hint,
+        )
+        return MemoryEvent(
+            action=MemoryAction.ADD,
+            memory_id=memory_id,
+            text=decision.text,
+            actor_id=actor_id,
+            role=role,
+            memory_type=memory_type.value,
+            valid_at=valid_at,
+            engine=decision.engine,
+            confidence=decision.confidence,
+            rung="parked",
+            open_decision_id=od_id,
+        )
+
     def _update_memory(self, memory_id: str, new_text: str, timestamp: int) -> str | None:
         owned = self._owned_memory(memory_id)
         if owned is None:
@@ -1393,6 +1699,8 @@ class _MemoryCore:
         old_text = props.get("text", "")
 
         new_embedding = _as_vector(self._embedder.embed([new_text])[0])
+        if self._embedding_dims and len(new_embedding) != self._embedding_dims:
+            raise ValueError(f"Embedding dimension mismatch: got {len(new_embedding)}, expected {self._embedding_dims}")
         self._db.set_node_property(node_id, "text", new_text)
         self._db.set_node_property(node_id, "updated_at", timestamp)
         self._db.set_node_property(node_id, self._config.vector_property, new_embedding)
@@ -1418,7 +1726,7 @@ class _MemoryCore:
         old_text = props.get("text", "")
 
         self._db.set_node_property(node_id, "expired_at", timestamp)
-        if self._config.bitemporal_on and invalid_at is not None:
+        if (self._config.bitemporal_on or self._config.ontology.interval_closing) and invalid_at is not None:
             self._db.set_node_property(node_id, "invalid_at", invalid_at)
         return old_text
 
@@ -1965,12 +2273,34 @@ class _MemoryCore:
                 self._delete_relations(to_delete, existing_rels)
 
         ontology_on = self._config.pipeline.ontology
+        policy_on = self._config.policy_on
         type_by_name = {e.name: e.entity_type for e in extraction.entities}
         for relation in extraction.relations:
             # Layer D controlled types: a relation in the controlled vocabulary
             # that violates domain/range is a deterministic rejection, not graph
             # pollution. Free-text relation types pass through (baseline).
-            if ontology_on and is_violation(
+            edge_props: dict = {"relation_type": relation.relation_type}
+            if policy_on:
+                # Layer F shape guard: the configured severity decides (reject / flag / log).
+                from grafeo_memory.services import policy
+
+                verdict = policy.relation_verdict(
+                    self,
+                    relation.relation_type,
+                    type_by_name.get(relation.source, ""),
+                    type_by_name.get(relation.target, ""),
+                )
+                if verdict.rejects:
+                    logger.warning("policy shape %s: rejecting %s", verdict.shape, verdict.message)
+                    policy.count(self, "shape:relation_domain_range:rejected")
+                    continue
+                if verdict.flags:
+                    edge_props["flagged"] = verdict.shape
+                    edge_props["confidence"] = 0.5
+                    policy.count(self, "shape:relation_domain_range:flagged")
+                elif not verdict.ok:
+                    logger.info("policy shape %s: %s", verdict.shape, verdict.message)
+            elif ontology_on and is_violation(
                 relation.relation_type,
                 type_by_name.get(relation.source, ""),
                 type_by_name.get(relation.target, ""),
@@ -1985,9 +2315,79 @@ class _MemoryCore:
             source_id = entity_ids.get(relation.source)
             target_id = entity_ids.get(relation.target)
             if source_id is not None and target_id is not None:
-                self._db.create_edge(source_id, target_id, RELATION_EDGE, {"relation_type": relation.relation_type})
+                self._db.create_edge(source_id, target_id, RELATION_EDGE, edge_props)
 
-    def _normalize_entity_names(self, extraction: ExtractionResult, uid: str) -> None:
+    async def _normalize_entities_async(self, extraction: ExtractionResult, uid: str, on_usage=None) -> None:
+        """Ladder rungs 1-2 (always), 3 (``ontology.write_embedding_rung``) and 4
+        (``ontology.rung4``: the ambiguous residue becomes one categorical question per
+        mention to the decision model; an unsure answer parks when the bucket is on)."""
+        ocfg = self._config.ontology
+        embed = None
+        if ocfg.write_embedding_rung:
+
+            def embed(text: str) -> list[float]:
+                return _as_vector(self._embedder.embed([text])[0])
+
+        residue: list = []
+        self._normalize_entity_names(extraction, uid, embed=embed, residue=residue if ocfg.rung4 else None)
+        if not residue or self._decision_model is None:
+            return
+        from grafeo_memory.core.bucket import NEW_ENTITY, entity_question
+        from grafeo_memory.providers.decision.types import CategoricalQuestion
+
+        questions = []
+        for idx, (ent, res, scheme) in enumerate(residue):
+            labels = [scheme.concepts[c].pref_label for c in res.candidates[:5]]
+            questions.append(
+                CategoricalQuestion(
+                    question_id=f"m{idx}",
+                    question=entity_question(ent.name, labels),
+                    choices=[*labels, NEW_ENTITY],
+                )
+            )
+        state = "Mentions to resolve against known entities of the same type:\n" + "\n".join(
+            f"m{i}: {ent.name} ({ent.entity_type})" for i, (ent, _r, _s) in enumerate(residue)
+        )
+        try:
+            decisions = await self._decision_model.decide_async(state, questions)
+        except Exception:
+            logger.warning("ontology rung 4: decision model failed, mentions stay new entities", exc_info=True)
+            return
+        by_id = {d.question_id: d for d in decisions}
+        accept = self._config.pipeline.memories.confidence_threshold
+        renamed: dict[str, str] = {}
+        for idx, (ent, _res, _scheme) in enumerate(residue):
+            d = by_id.get(f"m{idx}")
+            q = questions[idx]
+            if d is None or str(d.value) not in q.choices:
+                continue
+            if d.confidence >= accept:
+                if str(d.value) != NEW_ENTITY:
+                    renamed[ent.name] = str(d.value)
+                    ent.name = str(d.value)
+                self._layer_counts["rung:ontology.rung4"] = self._layer_counts.get("rung:ontology.rung4", 0) + 1
+            elif self._config.bucket_on:
+                from grafeo_memory.services import bucket
+
+                bucket.create(
+                    self,
+                    uid,
+                    kind="entity_identity",
+                    question=q.question,
+                    options=list(q.choices),
+                    evidence=[ent.name],
+                    proposed=str(d.value),
+                    confidence=d.confidence,
+                    rung="decision",
+                    payload={"mention": ent.name, "entity_type": ent.entity_type},
+                )
+        for r in extraction.relations:
+            r.source = renamed.get(r.source, r.source)
+            r.target = renamed.get(r.target, r.target)
+
+    def _normalize_entity_names(
+        self, extraction: ExtractionResult, uid: str, *, embed=None, residue: list | None = None
+    ) -> None:
         """Layer D ontology, normalization ladder rungs 1-2 (deterministic, zero
         model calls): resolve each extracted mention to an existing canonical
         entity name, exact prefLabel match, then the alias/notation map (both
@@ -2027,8 +2427,23 @@ class _MemoryCore:
         for e in extraction.entities:
             if coerce_entity_type(e.entity_type) is None:
                 continue  # unknown type: leave the mention as-is (baseline)
-            res = normalize(e.name, e.entity_type, scheme)  # no embedder: rungs 1-2 only
-            if res.canonical_id is not None and res.rung <= 2:
+            res = normalize(
+                e.name,
+                e.entity_type,
+                scheme,
+                embed=embed,
+                threshold=self._config.ontology.embed_threshold,
+                concept_vectors=self._concept_vectors if embed is not None else None,
+            )  # no embedder: rungs 1-2 only
+            if (
+                res.canonical_id is None
+                and res.rung == 4
+                and residue is not None
+                and res.candidates
+                and res.confidence >= self._config.ontology.rung4_floor
+            ):
+                residue.append((e, res, scheme))
+            if res.canonical_id is not None and res.rung <= (3 if embed is not None else 2):
                 canonical = scheme.concepts[res.canonical_id].pref_label
                 if canonical != e.name:
                     logger.debug("ontology normalize: %r -> %r (rung %d)", e.name, canonical, res.rung)
@@ -2319,7 +2734,7 @@ class _MemoryCore:
         MemoryConfig.db_memory_limit_bytes / GRAFEO_MEMORY_DB_MEMORY_LIMIT_MB.
         """
         try:
-            usage = self._db.memory_usage()
+            usage = self._db.memory_usage()  # ty: ignore[missing-attribute]
         except Exception:
             return
         total = usage.get("total_bytes") or 0
@@ -2349,17 +2764,75 @@ class _MemoryCore:
             )
 
     def _compile_impl(self):
-        """Layer E offline compile pass (minimal cut): type- and scope-constrained
-        embedding merges of entities (ladder rung 3) plus a controlled relation-type
-        validation report. No LLM calls; embeddings are content-cached."""
+        """Sync compile: the full pass of ``_compile_async``."""
+        return run_sync(self._compile_async())
+
+    async def _compile_async(self, on_usage=None):
+        """Layer E offline compile pass, idempotent and recomputable from the store:
+
+        1. entity merges (ladder rung 3) and merge proposals below the merge threshold
+           (open ``entity_merge`` decisions when the bucket is on);
+        2. the controlled relation-type violation report;
+        3. Layer B growth: generated subject children (taxonomy on);
+        4. Layer F retention TTLs (policy on);
+        5. Layer G: expiry, then the self-resolution sweep over the open bucket.
+        """
         from grafeo_memory.services.compile import compile_graph
 
-        return compile_graph(
+        cfg = self._config
+        uid = cfg.user_id
+        res = compile_graph(
             self._db,
-            self._config.user_id,
+            uid,
             self._embedder,
-            graph_name=self._config.graph_name,
+            merge_threshold=cfg.compilation.merge_threshold,
+            propose_threshold=cfg.compilation.propose_threshold,
+            graph_name=cfg.graph_name,
         )
+        if cfg.bucket_on and res.proposals:
+            from grafeo_memory.core.bucket import ENTITY_MERGE_OPTIONS, merge_question
+            from grafeo_memory.services import bucket
+
+            for prop in res.proposals:
+                bucket.create(
+                    self,
+                    uid,
+                    kind="entity_merge",
+                    question=merge_question(prop["alias"], prop["canonical"]),
+                    options=list(ENTITY_MERGE_OPTIONS),
+                    evidence=[prop["alias"], prop["canonical"]],
+                    proposed="merge",
+                    confidence=prop["score"],
+                    rung="compile",
+                    importance=prop["score"],
+                    payload={
+                        "alias": prop["alias"],
+                        "alias_id": prop["alias_id"],
+                        "canon_id": prop["canon_id"],
+                    },
+                )
+        if cfg.taxonomy_on and cfg.compilation.grow_taxonomy:
+            from grafeo_memory.services import scoping
+
+            try:
+                res.taxonomy = scoping.grow(self, uid)
+            except Exception:
+                logger.warning("compile: taxonomy growth failed", exc_info=True)
+        if cfg.policy_on:
+            from grafeo_memory.services import policy
+
+            res.retention_expired = policy.retention(self, uid)
+        if cfg.bucket_on:
+            from grafeo_memory.services import bucket
+
+            res.bucket = {"expired": bucket.expire(self, uid)}
+            try:
+                res.bucket["self_resolved"] = await bucket.self_resolve(self, uid, None, on_usage=on_usage)
+            except Exception:
+                logger.warning("compile: bucket sweep failed", exc_info=True)
+        self._write_version += 1
+        self._graph_dirty = True
+        return res
 
     def _stats_impl(self) -> MemoryStats:
         """Collect database introspection statistics."""
@@ -2373,11 +2846,17 @@ class _MemoryCore:
         semantic = 0
         procedural = 0
         episodic = 0
+        certified = 0
+        provisional = 0
         for item in memory_nodes:
             # get_nodes_by_label returns list of (id, props_dict) tuples
             props = item[1] if isinstance(item, tuple) else _get_props(item)
             if gn and props.get("graph_name") != gn:
                 continue
+            if props.get("status") == "certified":
+                certified += 1
+            if props.get("provisional"):
+                provisional += 1
             mtype = props.get("memory_type", "semantic")
             if mtype == "procedural":
                 procedural += 1
@@ -2436,18 +2915,29 @@ class _MemoryCore:
         total = semantic + procedural + episodic
         db_limits: dict = {}
         try:
-            usage = self._db.memory_usage()
+            usage = self._db.memory_usage()  # ty: ignore[missing-attribute]
             db_limits = {
                 "memory_bytes": usage.get("total_bytes"),
                 "memory_limit_bytes": usage.get("limit_bytes"),
                 "spill_bytes": (usage.get("spill") or {}).get("total_bytes"),
                 "spill_limit_bytes": (usage.get("spill") or {}).get("limit_bytes"),
             }
-            stats = self._db.detailed_stats()
+            stats = self._db.detailed_stats()  # ty: ignore[missing-attribute]
             db_limits["disk_bytes"] = stats.get("disk_bytes")
         except Exception:
             pass
         cache_stats = self._cache.stats() if self._cache is not None else {}
+        layers: dict = {}
+        if self._layer_counts or self._config.bucket_on or self._config.policy_on:
+            from grafeo_memory.services import policy
+
+            layers = policy.rung_stats(self)
+            layers["certified"] = certified
+            layers["provisional"] = provisional
+            if self._config.bucket_on:
+                from grafeo_memory.services import bucket
+
+                layers["bucket"] = bucket.stats(self, self._config.user_id)
         return MemoryStats(
             total_memories=total,
             semantic_count=semantic,
@@ -2466,7 +2956,24 @@ class _MemoryCore:
             },
             cache=cache_stats,
             db_limits=db_limits,
+            layers=layers,
         )
+
+    def _certify_impl(self, memory_id: str, certified: bool = True) -> bool:
+        owned = self._owned_memory(memory_id)
+        if owned is None:
+            return False
+        self._db.set_node_property(owned[0], "status", "certified" if certified else "inferred")
+        self._db.set_node_property(owned[0], "certified_by", "user" if certified else "")
+        return True
+
+    def _resolve_impl(self, decision_id: str, answer: str) -> bool:
+        from grafeo_memory.services import bucket
+
+        od = bucket.get(self, decision_id)
+        if od is None or od.status not in ("open", "asked"):
+            return False
+        return bucket.apply(self, od, answer, "user")
 
     def _set_importance_impl(self, memory_id: str, importance: float) -> bool:
         """Set the base importance score for a memory."""
@@ -2477,6 +2984,27 @@ class _MemoryCore:
             return False
         self._db.set_node_property(owned[0], "importance", importance)
         return True
+
+
+def _fact_slots(decisions: list[ReconciliationDecision], fact_texts: list[str]) -> list[int | None]:
+    """The extracted fact each decision belongs to, for its embedding and validity annotation.
+
+    A decision whose text is a fact's text belongs to that fact. Otherwise, when there is
+    one decision per fact, its position decides (a reworded UPDATE keeps its fact's
+    annotation). With a different count and no text match it belongs to no fact (None).
+    """
+    by_text: dict[str, list[int]] = {}
+    for j, t in enumerate(fact_texts):
+        by_text.setdefault(t.strip(), []).append(j)
+    aligned = len(decisions) == len(fact_texts)
+    slots: list[int | None] = []
+    for i, d in enumerate(decisions):
+        hits = by_text.get(d.text.strip(), [])
+        if aligned and (not hits or i in hits):
+            slots.append(i)
+        else:
+            slots.append(hits[0] if hits else None)
+    return slots
 
 
 def _as_vector(embedding: Iterable[float]) -> list[float]:
@@ -2556,6 +3084,7 @@ class MemoryManager(_MemoryCore):
         infer: bool = True,
         importance: float = 1.0,
         memory_type: MemoryType | str = MemoryType.SEMANTIC,
+        scopes: list[str] | None = None,
     ) -> AddResult:
         """Extract facts from text and store them as memories.
 
@@ -2577,6 +3106,7 @@ class MemoryManager(_MemoryCore):
                 infer=infer,
                 importance=importance,
                 memory_type=memory_type,
+                scopes=scopes,
             )
         )
 
@@ -2625,6 +3155,8 @@ class MemoryManager(_MemoryCore):
         diverse: bool = False,
         grouped: Literal[False] = False,
         point_in_time: int | None = None,
+        subjects: list[str] | None = None,
+        scopes: list[str] | None = None,
     ) -> SearchResponse: ...
 
     @overload
@@ -2644,6 +3176,8 @@ class MemoryManager(_MemoryCore):
         diverse: bool = False,
         grouped: Literal[True],
         point_in_time: int | None = None,
+        subjects: list[str] | None = None,
+        scopes: list[str] | None = None,
     ) -> dict[str, list[SearchResult]]: ...
 
     def search(
@@ -2662,6 +3196,8 @@ class MemoryManager(_MemoryCore):
         diverse: bool = False,
         grouped: bool = False,
         point_in_time: int | None = None,
+        subjects: list[str] | None = None,
+        scopes: list[str] | None = None,
     ) -> SearchResponse | dict[str, list[SearchResult]]:
         """Search memories by semantic similarity and graph context."""
         response = run_sync(
@@ -2678,6 +3214,8 @@ class MemoryManager(_MemoryCore):
                 include_expired=include_expired,
                 diverse=diverse,
                 point_in_time=point_in_time,
+                subjects=subjects,
+                scopes=scopes,
             )
         )
         if grouped:
@@ -2809,11 +3347,83 @@ class MemoryManager(_MemoryCore):
         return self._stats_impl()
 
     def compile(self):
-        """Layer E: run one offline compile pass (see services/compile.py) and
-        return a CompileResult. The manager never runs it on its own; call it after
-        write batches. ``PipelineConfig.compile`` only tells the bench harnesses to
-        call it after ingest."""
+        """Layer E: run one offline compile pass and return a CompileResult: entity
+        merges and merge proposals, the relation violation report, taxonomy growth,
+        retention and the open-decisions sweep (each layer only when it is on).
+        Runs automatically every ``compilation.every_n_adds`` adds when set;
+        ``PipelineConfig.compile`` tells the bench harnesses to call it after ingest."""
         return self._compile_impl()
+
+    # --- Layers A, B, E, G -------------------------------------------------
+
+    def assemble(
+        self,
+        query: str,
+        session_id: str | None = None,
+        budget: int | None = None,
+        *,
+        user_id: str | None = None,
+        k: int = 30,
+    ) -> ContextBlock:
+        """Layer A: a ContextBlock for ``query``: the session window first, then
+        instructions, facts and events within ``budget`` tokens, with provenance."""
+        from grafeo_memory.services import tiers
+
+        uid = user_id or self._config.user_id
+        return run_sync(tiers.assemble(self, query, uid, session_id or self._config.session_id, budget, k))
+
+    def end_session(self, session_id: str | None = None, *, user_id: str | None = None) -> AddResult:
+        """Layer A: promote the session window into long-term memory (extraction when
+        ``defer_extraction``) and store its summary as an episodic memory."""
+        from grafeo_memory.services import tiers
+
+        uid = user_id or self._config.user_id
+        return run_sync(tiers.end_session(self, uid, session_id or self._config.session_id))
+
+    def add_instruction(self, text: str, *, user_id: str | None = None) -> MemoryEvent:
+        """Layer A: store a standing instruction as a certified procedural memory."""
+        from grafeo_memory.services import tiers
+
+        return run_sync(tiers.add_instruction(self, text, user_id or self._config.user_id))
+
+    def certify(self, memory_id: str, certified: bool = True) -> bool:
+        """Layer E: mark a memory certified (user-confirmed), or back to inferred."""
+        return self._certify_impl(memory_id, certified)
+
+    def list_open_decisions(
+        self, status: str | None = "open", kind: str | None = None, *, ask: bool = False, user_id: str | None = None
+    ) -> list[OpenDecision]:
+        """Layer G: parked judgments. ``ask=True`` keeps those above the importance
+        floor and marks them asked (for an app that relays them to the user)."""
+        from grafeo_memory.services import bucket
+
+        return bucket.list_decisions(self, user_id or self._config.user_id, status, kind, ask)
+
+    def resolve_open_decision(self, decision_id: str, answer: str) -> bool:
+        """Layer G: answer a parked question; the answer is written back as ground truth."""
+        return self._resolve_impl(decision_id, answer)
+
+    def scopes(self, *, user_id: str | None = None) -> dict:
+        """Layer B: the subject tree (roots, generated children) and active instance scopes."""
+        from grafeo_memory.services import scoping
+
+        return scoping.scopes(self, user_id or self._config.user_id)
+
+    def set_root_scheme(
+        self,
+        *,
+        add: dict[str, str] | None = None,
+        rename: dict[str, str] | None = None,
+        retire: list[str] | None = None,
+        hard: dict[str, bool] | None = None,
+        user_id: str | None = None,
+    ) -> dict:
+        """Layer B: add, rename, retire or harden subject roots (versioned; retiring never deletes)."""
+        from grafeo_memory.services import scoping
+
+        return scoping.set_root_scheme(
+            self, user_id or self._config.user_id, add=add, rename=rename, retire=retire, hard=hard
+        )
 
     def explain(
         self,
@@ -2827,6 +3437,8 @@ class MemoryManager(_MemoryCore):
         include_expired: bool = False,
         diverse: bool = False,
         point_in_time: int | None = None,
+        subjects: list[str] | None = None,
+        scopes: list[str] | None = None,
     ) -> ExplainResult:
         """Run a search and return a step-by-step pipeline trace."""
         return run_sync(
@@ -2840,6 +3452,8 @@ class MemoryManager(_MemoryCore):
                 include_expired=include_expired,
                 diverse=diverse,
                 point_in_time=point_in_time,
+                subjects=subjects,
+                scopes=scopes,
             )
         )
 
@@ -2876,6 +3490,7 @@ class AsyncMemoryManager(_MemoryCore):
         infer: bool = True,
         importance: float = 1.0,
         memory_type: MemoryType | str = MemoryType.SEMANTIC,
+        scopes: list[str] | None = None,
     ) -> AddResult:
         """Extract facts from text and store them as memories."""
         return await self._add(
@@ -2886,6 +3501,7 @@ class AsyncMemoryManager(_MemoryCore):
             infer=infer,
             importance=importance,
             memory_type=memory_type,
+            scopes=scopes,
         )
 
     async def add_batch(
@@ -2927,6 +3543,8 @@ class AsyncMemoryManager(_MemoryCore):
         diverse: bool = False,
         grouped: Literal[False] = False,
         point_in_time: int | None = None,
+        subjects: list[str] | None = None,
+        scopes: list[str] | None = None,
     ) -> SearchResponse: ...
 
     @overload
@@ -2946,6 +3564,8 @@ class AsyncMemoryManager(_MemoryCore):
         diverse: bool = False,
         grouped: Literal[True],
         point_in_time: int | None = None,
+        subjects: list[str] | None = None,
+        scopes: list[str] | None = None,
     ) -> dict[str, list[SearchResult]]: ...
 
     async def search(
@@ -2964,6 +3584,8 @@ class AsyncMemoryManager(_MemoryCore):
         diverse: bool = False,
         grouped: bool = False,
         point_in_time: int | None = None,
+        subjects: list[str] | None = None,
+        scopes: list[str] | None = None,
     ) -> SearchResponse | dict[str, list[SearchResult]]:
         """Search memories by semantic similarity and graph context."""
         response = await self._search(
@@ -2979,6 +3601,8 @@ class AsyncMemoryManager(_MemoryCore):
             include_expired=include_expired,
             diverse=diverse,
             point_in_time=point_in_time,
+            subjects=subjects,
+            scopes=scopes,
         )
         if grouped:
             return self._group_results_by_session(response)
@@ -3071,11 +3695,82 @@ class AsyncMemoryManager(_MemoryCore):
 
     async def acompile(self):
         """Layer E: async offline compile pass; see MemoryManager.compile()."""
-        return self._compile_impl()
+        return await self._compile_async()
 
     def compile(self):
         """Sync alias for acompile() (compile is pure DB/embedding work)."""
         return self._compile_impl()
+
+    # --- Layers A, B, E, G -------------------------------------------------
+
+    async def assemble(
+        self,
+        query: str,
+        session_id: str | None = None,
+        budget: int | None = None,
+        *,
+        user_id: str | None = None,
+        k: int = 30,
+    ) -> ContextBlock:
+        """Layer A: a ContextBlock for ``query``: the session window first, then
+        instructions, facts and events within ``budget`` tokens, with provenance."""
+        from grafeo_memory.services import tiers
+
+        uid = user_id or self._config.user_id
+        return await tiers.assemble(self, query, uid, session_id or self._config.session_id, budget, k)
+
+    async def end_session(self, session_id: str | None = None, *, user_id: str | None = None) -> AddResult:
+        """Layer A: promote the session window into long-term memory (extraction when
+        ``defer_extraction``) and store its summary as an episodic memory."""
+        from grafeo_memory.services import tiers
+
+        uid = user_id or self._config.user_id
+        return await tiers.end_session(self, uid, session_id or self._config.session_id)
+
+    async def add_instruction(self, text: str, *, user_id: str | None = None) -> MemoryEvent:
+        """Layer A: store a standing instruction as a certified procedural memory."""
+        from grafeo_memory.services import tiers
+
+        return await tiers.add_instruction(self, text, user_id or self._config.user_id)
+
+    def certify(self, memory_id: str, certified: bool = True) -> bool:
+        """Layer E: mark a memory certified (user-confirmed), or back to inferred."""
+        return self._certify_impl(memory_id, certified)
+
+    def list_open_decisions(
+        self, status: str | None = "open", kind: str | None = None, *, ask: bool = False, user_id: str | None = None
+    ) -> list[OpenDecision]:
+        """Layer G: parked judgments. ``ask=True`` keeps those above the importance
+        floor and marks them asked (for an app that relays them to the user)."""
+        from grafeo_memory.services import bucket
+
+        return bucket.list_decisions(self, user_id or self._config.user_id, status, kind, ask)
+
+    def resolve_open_decision(self, decision_id: str, answer: str) -> bool:
+        """Layer G: answer a parked question; the answer is written back as ground truth."""
+        return self._resolve_impl(decision_id, answer)
+
+    def scopes(self, *, user_id: str | None = None) -> dict:
+        """Layer B: the subject tree (roots, generated children) and active instance scopes."""
+        from grafeo_memory.services import scoping
+
+        return scoping.scopes(self, user_id or self._config.user_id)
+
+    def set_root_scheme(
+        self,
+        *,
+        add: dict[str, str] | None = None,
+        rename: dict[str, str] | None = None,
+        retire: list[str] | None = None,
+        hard: dict[str, bool] | None = None,
+        user_id: str | None = None,
+    ) -> dict:
+        """Layer B: add, rename, retire or harden subject roots (versioned; retiring never deletes)."""
+        from grafeo_memory.services import scoping
+
+        return scoping.set_root_scheme(
+            self, user_id or self._config.user_id, add=add, rename=rename, retire=retire, hard=hard
+        )
 
     async def explain(
         self,
@@ -3089,6 +3784,8 @@ class AsyncMemoryManager(_MemoryCore):
         include_expired: bool = False,
         diverse: bool = False,
         point_in_time: int | None = None,
+        subjects: list[str] | None = None,
+        scopes: list[str] | None = None,
     ) -> ExplainResult:
         """Run a search and return a step-by-step pipeline trace."""
         return await self._explain(
@@ -3101,4 +3798,6 @@ class AsyncMemoryManager(_MemoryCore):
             include_expired=include_expired,
             diverse=diverse,
             point_in_time=point_in_time,
+            subjects=subjects,
+            scopes=scopes,
         )

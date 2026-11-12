@@ -174,3 +174,29 @@ class TestServerLifespan:
             assert manager._config.db_path is None
         finally:
             manager.close()
+
+
+class TestLayerTools:
+    def test_roots_instructions_assemble_and_bucket(self):
+        from grafeo_memory.common.types import BucketConfig, TaxonomyConfig
+
+        config = MemoryConfig(
+            user_id="mcp_user",
+            embedding_dimensions=16,
+            taxonomy=TaxonomyConfig(enabled=True),
+            bucket=BucketConfig(enabled=True),
+        )
+        manager = AsyncMemoryManager(
+            make_test_model([{"entities": [], "relations": []}]), config, embedder=MockEmbedder(16)
+        )
+        ctx = _ctx(manager)
+        roots = _call(tools.memory_manage_roots(add={"pets": "Pets"}, retire=["home"], ctx=ctx))
+        assert any(n["id"] == "pets" for n in roots["scopes"]["subjects"])
+        ods = _call(tools.memory_open_decisions(kind="root_migration", ctx=ctx))["decisions"]
+        assert len(ods) == 1
+        assert _call(tools.memory_resolve_decision(ods[0]["id"], "pets", ctx=ctx)) == {"resolved": True}
+        ev = _call(tools.memory_add_instruction("Always answer in Dutch", ctx=ctx))["event"]
+        assert ev["memory_type"] == "procedural"
+        block = _call(tools.memory_assemble("language?", ctx=ctx))
+        assert "Always answer in Dutch" in block["text"]
+        manager.close()

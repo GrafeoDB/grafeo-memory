@@ -193,36 +193,38 @@ async def _temporal_precheck(
     decision_model: DecisionModel | None = None,
     stage: StageConfig | None = None,
     question_pack=None,
+    park_floor: float | None = None,
+    park_actions: tuple[str, ...] = (),
 ) -> list[ReconciliationDecision]:
     """Layer D pre-model temporal rules: partition candidates per new fact by
     validity-interval overlap. A fact with no contested candidate is
     deterministically ADD (engine="temporal") with zero model calls, disjoint
-    validities both stand. The rest reconcile against only their contested
-    candidates, so cleared pairs never reach the engine."""
+    validities both stand. The rest reconcile against only their own contested
+    candidates, so cleared pairs never reach the engine: pending facts are grouped
+    by identical contested set, one engine call per distinct set (usually one)."""
     by_id = {str(m["id"]): m for m in existing_memories}
     cand_ivs = [(cid, extract_interval(str(m.get("text", "")))) for cid, m in by_id.items()]
     out: list[ReconciliationDecision | None] = [None] * len(new_facts)
-    pending: list[int] = []
-    contested: set[str] = set()
+    groups: dict[tuple[str, ...], list[int]] = {}
     for i, f in enumerate(new_facts):
         part = partition_candidates(extract_interval(f.text), cand_ivs)
         if part.contested:
-            pending.append(i)
-            contested.update(part.contested)
+            groups.setdefault(tuple(part.contested), []).append(i)
         else:
             out[i] = ReconciliationDecision(action=MemoryAction.ADD, text=f.text, engine="temporal")
-    if pending:
-        filtered = [by_id[c] for c in contested if c in by_id]
-        sub_facts = [new_facts[i] for i in pending]
+    extra: list[ReconciliationDecision] = []
+    for contested, pending in groups.items():
         sub = await reconcile_async(
             model,
-            sub_facts,
-            filtered,
+            [new_facts[i] for i in pending],
+            [by_id[c] for c in contested],
             _on_usage=_on_usage,
             engine=engine,
             decision_model=decision_model,
             stage=stage,
             question_pack=question_pack,
+            park_floor=park_floor,
+            park_actions=park_actions,
         )
         if len(sub) == len(pending):
             for j, i in enumerate(pending):
@@ -230,9 +232,25 @@ async def _temporal_precheck(
         else:
             # The engine answered a different number of decisions than facts (an LLM may
             # add an UPDATE plus a DELETE for one fact, or skip one): keep every answer as
-            # given, like the plain LLM path, rather than padding or truncating by position.
-            return [d for d in out if d is not None] + list(sub)
-    return [d for d in out if d is not None]
+            # given, like the plain LLM path; the executor matches them to facts by text.
+            extra.extend(sub)
+    return [d for d in out if d is not None] + extra
+
+
+def _parked_indices(pairs: list, park_floor: float | None, park_actions: tuple[str, ...]) -> set[int]:
+    if park_floor is None:
+        return set()
+    return {
+        i
+        for i, (action, d) in enumerate(pairs)
+        if d is not None and d.confidence < park_floor and action.action.value in park_actions
+    }
+
+
+def _mark_parked(action: ReconciliationDecision, d: Decision | None) -> ReconciliationDecision:
+    from dataclasses import replace
+
+    return replace(action, parked=True, alternatives=[str(d.value)] if d is not None else [])
 
 
 async def reconcile_async(
@@ -246,6 +264,8 @@ async def reconcile_async(
     stage: StageConfig | None = None,
     question_pack=None,
     temporal_precheck: bool = False,
+    park_floor: float | None = None,
+    park_actions: tuple[str, ...] = (),
 ) -> list[ReconciliationDecision]:
     """Reconcile new facts against existing memories (async).
 
@@ -259,6 +279,10 @@ async def reconcile_async(
         question_pack: Optional global pack override ("per_fact"/"pairwise"/callable).
         temporal_precheck: Layer D pre-model temporal rules:
             facts with validity disjoint from every candidate skip the engine.
+        park_floor: Layer G: a decision-model answer whose confidence is below this
+            floor (and whose action is in ``park_actions``) is marked ``parked``
+            instead of being applied or escalated; the executor stores the fact
+            provisionally and records an open decision. None = never park.
 
     Returns:
         A list of ReconciliationDecision objects. Each carries ``engine``
@@ -285,6 +309,8 @@ async def reconcile_async(
             decision_model=decision_model,
             stage=stage,
             question_pack=question_pack,
+            park_floor=park_floor,
+            park_actions=park_actions,
         )
 
     if eng == Engine.LLM:
@@ -304,16 +330,20 @@ async def reconcile_async(
         logger.warning("Decision-model reconciliation failed, falling back to LLM", exc_info=True)
         return await _llm_reconcile(model, new_facts, existing_memories, _on_usage=_on_usage)
 
+    parked = _parked_indices(pairs, park_floor, park_actions)
+    pairs = [(_mark_parked(a, d) if i in parked else a, d) for i, (a, d) in enumerate(pairs)]
+
     if eng == Engine.DECISION:
         return [action for action, _d in pairs]
 
     # HYBRID: escalate uncertain facts to one LLM batch call. Confident
-    # decisions stand as-is; the LLM only sees the uncertain subset.
+    # decisions stand as-is; the LLM only sees the uncertain subset. Parked
+    # decisions (below the bucket floor) are not escalated: they wait for evidence.
     out = [action for action, _d in pairs]
     esc_idx = [
         i
         for i, (_action, d) in enumerate(pairs)
-        if d is None or should_escalate(d, stage.confidence_threshold, stage.escalation_signal)
+        if i not in parked and (d is None or should_escalate(d, stage.confidence_threshold, stage.escalation_signal))
     ]
     if esc_idx:
         sub_facts = [new_facts[i] for i in esc_idx]
@@ -342,6 +372,8 @@ def reconcile(
     stage: StageConfig | None = None,
     question_pack=None,
     temporal_precheck: bool = False,
+    park_floor: float | None = None,
+    park_actions: tuple[str, ...] = (),
 ) -> list[ReconciliationDecision]:
     """Reconcile new facts against existing memories (sync)."""
     return run_sync(
@@ -355,5 +387,7 @@ def reconcile(
             stage=stage,
             question_pack=question_pack,
             temporal_precheck=temporal_precheck,
+            park_floor=park_floor,
+            park_actions=park_actions,
         )
     )

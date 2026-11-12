@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum, StrEnum
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from pydantic_ai.models import KnownModelName, Model
@@ -168,12 +168,241 @@ class PipelineConfig:
     # Layer E: the bench harnesses call memory.compile() after ingest when set. The
     # manager does not read it; applications call compile() themselves.
     compile: bool = False
-    # Layer B: faceted-taxonomy scoping/routing. Not implemented yet, no-op + warning.
+    # Layer B: faceted-taxonomy scoping (sugar over MemoryConfig.taxonomy.enabled).
     taxonomy: bool = False
-    # Layer F: policy cascade (rule packs over the canonical store). Not yet, no-op.
+    # Layer F: policy cascade, rule packs over the canonical store (sugar over MemoryConfig.policy.enabled).
     policy: bool = False
-    # Layer G: open-decisions bucket. Not implemented yet, no-op + warning.
+    # Layer G: open-decisions bucket (sugar over MemoryConfig.bucket.enabled).
     bucket: bool = False
+
+
+# --- Layer configs (all default off = exactly the behavior without them) ---------
+
+
+@dataclass
+class OntologyConfig:
+    """Layer D knobs beyond the ``pipeline.ontology`` switch (rungs 1-2 + controlled types)."""
+
+    # Rung 3 at write time: type-constrained embedding similarity of a new mention
+    # against the existing entities (embeddings are content-cached).
+    write_embedding_rung: bool = False
+    embed_threshold: float = 0.92
+    # Rung 4: the ambiguous residue (best similarity in [rung4_floor, embed_threshold))
+    # becomes one categorical question to the decision model. Below the floor the
+    # mention is a new entity; an answer below the bucket floor parks.
+    rung4: bool = False
+    rung4_floor: float = 0.75
+    # UPDATE closes the superseded fact's validity interval at the new fact's start
+    # (parsed from its text when the temporal annotator gave none). Needs bitemporal.
+    interval_closing: bool = False
+
+
+@dataclass
+class RetrievalConfig:
+    """Read-path knobs (Layer D retrieval order, Layer E certification ranking)."""
+
+    # "vector": today's hybrid + graph search. "deterministic": query mentions ->
+    # entities (ladder rungs 1-2) -> relation expansion -> memories of those entities,
+    # boosted and filled in by vector similarity within that set.
+    order: str = "vector"
+    expansion_depth: int = 1  # relation hops from the mentioned entities (0 = only them)
+    deterministic_boost: float = 0.2  # score multiplier bonus for memories in the deterministic set
+    deterministic_cap: int = 200  # max memories pulled from the deterministic set
+    # Allen filter: when the query names a time, memories whose interval overlaps it
+    # get temporal_boost, disjoint ones lose it.
+    temporal_filter: bool = False
+    temporal_boost: float = 0.2
+    certified_boost: float = 0.0  # score multiplier bonus for certified memories
+
+
+@dataclass
+class CompileConfig:
+    """Layer E compile and certification knobs."""
+
+    merge_threshold: float = 0.92  # rung-3 entity merges at or above this similarity
+    propose_threshold: float = 0.85  # pairs in [propose, merge) become merge proposals
+    every_n_adds: int = 0  # 0 = manual compile(); N = compile after every N infer adds
+    grow_taxonomy: bool = True  # generated subject children (when the taxonomy is on)
+    promote_after: int = 3  # stable observations (re-stated facts) that promote a memory to certified
+
+
+@dataclass
+class BucketConfig:
+    """Layer G: park low-certainty judgments as typed open decisions instead of forcing them."""
+
+    enabled: bool = False
+    # A decision-model answer with confidence below the floor parks (DECISION and
+    # HYBRID; in HYBRID it parks instead of escalating). The fact is kept, flagged
+    # provisional; the contested memory is left as is.
+    floor: float = 0.5
+    park_actions: tuple[str, ...] = ("update", "delete", "none")  # low-confidence ADD always stands
+    max_open: int = 100  # oldest open entries beyond this expire to an explicit unknown
+    ttl_days: float = 30.0  # open entries older than this expire (0 = never)
+    self_resolution: bool = True  # re-judge on new evidence and in compile()
+    rejudge_per_add: int = 3  # max parked questions re-judged per write that touches their evidence
+    resolve_engine: str = "llm"  # rung that re-judges parked items: "llm" or "decision"
+    provisional_penalty: float = 0.0  # search score reduction for provisional memories, in [0, 1]
+    ask_user: bool = False  # never prompt by default; the app decides when to surface the queue
+    ask_importance_floor: float = 0.6
+
+
+@dataclass
+class PolicyConfig:
+    """Layer F: rule packs resolve judgments before any model (resolve or abstain)."""
+
+    enabled: bool = False
+    packs: tuple[str, ...] = ("compliance", "temporal", "entrenchment", "lifecycle")
+    # Conservative mode: a model decision that would change certified content parks
+    # (or stands down) instead of applying.
+    conservative: bool = True
+    # SHACL-style shape severities: "violation" rejects, "warning" writes with lowered
+    # confidence, "info" only logs.
+    shape_severity: dict[str, str] = field(
+        default_factory=lambda: {"relation_domain_range": "violation", "memory_provenance": "info"}
+    )
+    retention_days: dict[str, float] = field(default_factory=dict)  # memory_type -> TTL, applied in compile()
+    extra_secret_patterns: tuple[str, ...] = ()  # regexes added to the compliance pack
+
+
+@dataclass(frozen=True)
+class RootSpec:
+    """One designed subject root; ``keywords`` route queries and facts to it lexically."""
+
+    id: str
+    label: str
+    status: str = "shipped"  # shipped | user | certified
+    keywords: tuple[str, ...] = ()
+
+
+# The designed subject roots: id -> (label, routing keywords). Shipped and versioned, never inferred.
+_ROOT_KEYWORDS: dict[str, tuple[str, str]] = {
+    "general": ("General", ""),
+    "career": (
+        "Career & work",
+        "job work career interview employer colleague coworker boss "
+        "manager salary promotion office hired resume company client meeting",
+    ),
+    "technology": (
+        "Technology & tools",
+        "software code coding programming computer laptop phone app "
+        "python javascript tool tools stack database server ai",
+    ),
+    "skills": (
+        "Skills & learning",
+        "learn learning course class study studying school university degree skill skills practice lesson teacher exam",
+    ),
+    "projects": (
+        "Projects & goals",
+        "project projects goal goals plan plans deadline launch milestone startup business",
+    ),
+    "health": (
+        "Health & wellness",
+        "health doctor hospital sick illness injury therapy medication "
+        "exercise gym workout running diet sleep yoga mental",
+    ),
+    "finance": (
+        "Finance & legal",
+        "money bank budget loan mortgage tax taxes invest investment savings rent lawyer contract insurance debt",
+    ),
+    "relationships": (
+        "Relationships & social",
+        "friend friends family mother father mom dad sister brother wife "
+        "husband partner girlfriend boyfriend kids children son daughter wedding dating party",
+    ),
+    "home": (
+        "Home & daily life",
+        "home house apartment kitchen cooking cook cleaning garden "
+        "pet dog cat car commute shopping groceries neighborhood moved",
+    ),
+    "interests": (
+        "Interests & leisure",
+        "hobby hobbies music movie movies book books reading painting art "
+        "game games travel trip vacation concert sports photography hiking camping festival",
+    ),
+}
+DEFAULT_ROOTS: tuple[RootSpec, ...] = tuple(
+    RootSpec(rid, label, keywords=tuple(words.split())) for rid, (label, words) in _ROOT_KEYWORDS.items()
+)
+
+
+@dataclass
+class GrowthConfig:
+    min_cluster_size: int = 8
+    depth_cap: int = 4
+    merge_similarity: float = 0.9  # siblings above this similarity merge
+    cluster_similarity: float = 0.8  # cosine to a cluster centroid to join it (generated children)
+    demote_ttl_days: int = 30
+    min_fact_count: int = 3
+
+
+@dataclass
+class InstanceScopeConfig:
+    prominence_threshold: int = 5  # memories linked to an entity before it becomes a scope
+    hard_default: bool = False
+
+
+@dataclass
+class TaxonomyConfig:
+    """Layer B: subject facet (designed roots + generated children) x instance facet (prominent entities)."""
+
+    enabled: bool = False  # default off: single general scope = today's behavior
+    roots: tuple[RootSpec, ...] = DEFAULT_ROOTS
+    growth: GrowthConfig = field(default_factory=GrowthConfig)
+    instance_scopes: InstanceScopeConfig = field(default_factory=InstanceScopeConfig)
+    router_engine: str = "lexical"  # "lexical" | "decision" (ScoreQuestions for facts and queries with no lexical hit)
+    router_threshold: float = 0.5
+    max_scopes_per_query: int = 4
+    # "soft": in-scope memories get boosts, nothing is dropped. "filter": only
+    # in-scope memories and the general scope survive when a scope is active.
+    mode: str = "soft"
+    subject_boost: float = 0.15
+    instance_boost: float = 0.15
+    combination_boost: float = 0.1  # extra when a memory holds both an active subject and an active instance
+    hard_roots: tuple[str, ...] = ()  # memories under these roots surface only when the root is active
+
+
+@dataclass
+class WorkingConfig:
+    """Tier 0: the session window that ``assemble()`` puts first."""
+
+    enabled: bool = False
+    token_budget: int = 2000
+    window_messages: int = 20
+    summarize_on_overflow: bool = True
+    promote_on_session_end: bool = True
+    # True: add() only buffers the session and end_session() runs extraction once
+    # over the window. False: add() extracts as today and the window is context only.
+    defer_extraction: bool = False
+
+
+@dataclass
+class EpisodicConfig:
+    """Tier 1: wraps episodes + recency-weighted retrieval."""
+
+    enabled: bool = False
+    recency_weight: float = 0.0  # in [0, 1]: blend of the score with recency (0 = off)
+    recency_half_life_days: float = 30.0
+
+
+@dataclass
+class ProceduralConfig:
+    """Tier 3: standing instructions and corrections."""
+
+    enabled: bool = False
+    boost_weight: float = 0.2  # score multiplier bonus for procedural memories in search
+    auto_triggers: bool = False  # store "always/never/from now on/no, use X" user turns as instructions
+
+
+@dataclass
+class TiersConfig:
+    working: WorkingConfig = field(default_factory=WorkingConfig)
+    episodic: EpisodicConfig = field(default_factory=EpisodicConfig)
+    semantic: bool = True  # always on
+    procedural: ProceduralConfig = field(default_factory=ProceduralConfig)
+    # ContextBlock budget shares per section (assemble()); renormalized over the sections present.
+    section_shares: dict[str, float] = field(
+        default_factory=lambda: {"working": 0.4, "semantic": 0.3, "episodic": 0.15, "procedural": 0.15}
+    )
 
 
 @dataclass
@@ -259,6 +488,27 @@ class MemoryConfig:
     # or a DecisionModel instance. None = all stages run on the LLM (default).
     decision_model: str | Any | None = None  # Any = DecisionModel (grafeo_memory.providers.decision.protocol)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
+    # Layer configs; every one defaults to off. The flat pipeline toggles
+    # (pipeline.taxonomy / .policy / .bucket) are sugar that switch the matching layer on.
+    ontology: OntologyConfig = field(default_factory=OntologyConfig)
+    retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
+    compilation: CompileConfig = field(default_factory=CompileConfig)
+    taxonomy: TaxonomyConfig = field(default_factory=TaxonomyConfig)
+    policy: PolicyConfig = field(default_factory=PolicyConfig)
+    bucket: BucketConfig = field(default_factory=BucketConfig)
+    tiers: TiersConfig = field(default_factory=TiersConfig)
+
+    @property
+    def taxonomy_on(self) -> bool:
+        return bool(self.taxonomy.enabled or self.pipeline.taxonomy)
+
+    @property
+    def policy_on(self) -> bool:
+        return bool(self.policy.enabled or self.pipeline.policy)
+
+    @property
+    def bucket_on(self) -> bool:
+        return bool(self.bucket.enabled or self.pipeline.bucket)
 
     @property
     def bitemporal_on(self) -> bool:
@@ -268,8 +518,60 @@ class MemoryConfig:
 
     @property
     def episodes_on(self) -> bool:
-        """Episodes are on when ``enable_episodes`` or ``pipeline.episodes`` is set."""
-        return bool(self.enable_episodes or self.pipeline.episodes)
+        """Episodes are on when ``enable_episodes``, ``pipeline.episodes`` or ``tiers.episodic.enabled`` is set."""
+        return bool(self.enable_episodes or self.pipeline.episodes or self.tiers.episodic.enabled)
+
+    def _validate_layers(self) -> None:
+        unit = {
+            "ontology.embed_threshold": self.ontology.embed_threshold,
+            "ontology.rung4_floor": self.ontology.rung4_floor,
+            "retrieval.deterministic_boost": self.retrieval.deterministic_boost,
+            "retrieval.temporal_boost": self.retrieval.temporal_boost,
+            "retrieval.certified_boost": self.retrieval.certified_boost,
+            "compilation.merge_threshold": self.compilation.merge_threshold,
+            "compilation.propose_threshold": self.compilation.propose_threshold,
+            "bucket.floor": self.bucket.floor,
+            "bucket.provisional_penalty": self.bucket.provisional_penalty,
+            "bucket.ask_importance_floor": self.bucket.ask_importance_floor,
+            "taxonomy.router_threshold": self.taxonomy.router_threshold,
+            "taxonomy.subject_boost": self.taxonomy.subject_boost,
+            "taxonomy.instance_boost": self.taxonomy.instance_boost,
+            "taxonomy.combination_boost": self.taxonomy.combination_boost,
+            "tiers.episodic.recency_weight": self.tiers.episodic.recency_weight,
+            "tiers.procedural.boost_weight": self.tiers.procedural.boost_weight,
+        }
+        for name, val in unit.items():
+            if not (0.0 <= float(val) <= 1.0):
+                raise ValueError(f"{name} must be in [0.0, 1.0], got {val}")
+        choices = {
+            "retrieval.order": (self.retrieval.order, ("vector", "deterministic")),
+            "bucket.resolve_engine": (self.bucket.resolve_engine, ("llm", "decision")),
+            "taxonomy.mode": (self.taxonomy.mode, ("soft", "filter")),
+            "taxonomy.router_engine": (self.taxonomy.router_engine, ("lexical", "decision")),
+        }
+        for name, (val, allowed) in choices.items():
+            if val not in allowed:
+                raise ValueError(f"{name} must be one of {allowed}, got {val!r}")
+        for a in self.bucket.park_actions:
+            if a not in ("update", "delete", "none"):
+                raise ValueError(f"bucket.park_actions holds {a!r}; allowed: update, delete, none")
+        for sev in self.policy.shape_severity.values():
+            if sev not in ("violation", "warning", "info"):
+                raise ValueError(f"policy.shape_severity values must be violation/warning/info, got {sev!r}")
+        if self.retrieval.expansion_depth < 0:
+            raise ValueError("retrieval.expansion_depth must be >= 0")
+        if self.compilation.every_n_adds < 0:
+            raise ValueError("compilation.every_n_adds must be >= 0")
+        if self.tiers.working.token_budget <= 0 or self.tiers.working.window_messages <= 0:
+            raise ValueError("tiers.working.token_budget and window_messages must be positive")
+        uses_decision = (self.ontology.rung4 or self.taxonomy.router_engine == "decision") or (
+            self.bucket_on and self.bucket.resolve_engine == "decision"
+        )
+        if uses_decision and self.decision_model is None:
+            raise ValueError(
+                "ontology.rung4, taxonomy.router_engine='decision' and bucket.resolve_engine='decision' "
+                "need MemoryConfig.decision_model"
+            )
 
     def __post_init__(self) -> None:
         if self.enable_community_summaries and not self.enable_graph_algorithms:
@@ -334,6 +636,8 @@ class MemoryConfig:
         ):
             raise ValueError("pipeline.question_pack must be a pack name or a callable")
         # pack-name membership is validated by the registry in providers.decision
+
+        self._validate_layers()
 
         if self.graph_search_depth not in (1, 2):
             raise ValueError(f"graph_search_depth must be 1 or 2, got {self.graph_search_depth}")
@@ -406,6 +710,10 @@ class MemoryEvent:
     # confident it was (None when the provider gave no calibrated confidence).
     engine: str = "llm"
     confidence: float | None = None
+    # Layer F trace: the rung that resolved it ("rule:<id>", "decision", "llm", "fast", "temporal").
+    rung: str | None = None
+    # Layer G: the open decision this event parked (the memory is provisional), when any.
+    open_decision_id: str | None = None
 
 
 @dataclass
@@ -467,6 +775,12 @@ class ReconciliationDecision:
     # calibrated confidence, when the engine provides one.
     engine: str = "llm"
     confidence: float | None = None
+    # Layer F trace: which rung resolved the decision (None = the engine above).
+    rung: str | None = None
+    # Layer G: confidence stayed below the bucket floor; the executor parks it.
+    parked: bool = False
+    # The decision model's runner-up choice when it parked (for the open question).
+    alternatives: list[str] = field(default_factory=list)
 
 
 @runtime_checkable
@@ -510,6 +824,9 @@ class MemoryStats:
     cache: dict = field(default_factory=dict)
     # Engine limits vs usage: memory_bytes/memory_limit_bytes, disk_bytes, spill_limit_bytes
     db_limits: dict = field(default_factory=dict)
+    # Layer metrics: open decisions by status/kind, resolution rungs (deterministic share),
+    # certified/provisional counts. Empty when no layer is on.
+    layers: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -543,6 +860,104 @@ MENTIONS_EDGE = "MENTIONS"
 NEXT_EPISODE_EDGE = "NEXT_EPISODE"
 COMMUNITY_LABEL = "Community"
 HAS_MEMBER_EDGE = "HAS_MEMBER"
+OPEN_DECISION_LABEL = "OpenDecision"
+META_LABEL = "GrafeoMemoryMeta"
+TAXONOMY_LABEL = "TaxonomyState"
+SCOPE_OF_EDGE = "SCOPE_OF"
+SCHEMA_VERSION = 2
+
+
+@dataclass
+class OpenDecision:
+    """A parked judgment (Layer G): typed question, evidence, status and resolution."""
+
+    id: str
+    kind: str  # contradiction | duplicate | entity_identity | entity_merge | root_migration | ...
+    question: str
+    options: list[str]
+    evidence: list[str]  # memory ids (or entity names for entity kinds)
+    status: str = "open"  # open -> asked -> resolved | expired
+    proposed: str | None = None  # the engine's low-confidence answer
+    confidence: float | None = None
+    abstained_at_rung: str | None = None
+    created_at: int | None = None
+    updated_at: int | None = None
+    resolution: str | None = None  # the chosen option, or "unknown" on expiry
+    resolved_by: str | None = None  # user | self | expiry
+    resolved_at: int | None = None
+    importance: float = 0.5
+    payload: dict = field(default_factory=dict)
+
+
+@dataclass
+class ContextItem:
+    """One line of an assembled context, with its provenance."""
+
+    text: str
+    section: str  # working | semantic | episodic | procedural
+    memory_id: str | None = None
+    score: float | None = None
+    confidence: float | None = None
+    engine: str | None = None
+    status: str | None = None  # certified | inferred | provisional
+    session_id: str | None = None
+    created_at: int | None = None
+
+    def provenance(self) -> str:
+        parts = [f"id={self.memory_id}" if self.memory_id else "", f"engine={self.engine or 'llm'}"]
+        if self.confidence is not None:
+            parts.append(f"confidence={self.confidence:.2f}")
+        parts.append(f"status={self.status or 'inferred'}")
+        if self.session_id:
+            parts.append(f"session={self.session_id}")
+        return ", ".join(p for p in parts if p)
+
+
+@dataclass
+class ContextBlock:
+    """The working-tier output of ``assemble()``: sections in a stable order within a token budget."""
+
+    query: str
+    budget: int
+    sections: dict[str, list[ContextItem]] = field(default_factory=dict)
+    summary: str | None = None  # rolling summary of the overflowed window
+    tokens: int = 0
+    open_questions: list[OpenDecision] = field(default_factory=list)
+
+    ORDER: ClassVar[tuple[str, ...]] = ("working", "procedural", "semantic", "episodic")
+
+    def items(self) -> list[ContextItem]:
+        return [i for name in self.ORDER for i in self.sections.get(name, [])]
+
+    def render(self, provenance: bool = True) -> str:
+        out: list[str] = []
+        titles = {
+            "working": "Current session",
+            "procedural": "Instructions",
+            "semantic": "Known facts",
+            "episodic": "Past events",
+        }
+        if self.summary:
+            out.append("## Session summary\n" + self.summary)
+        for name in self.ORDER:
+            items = self.sections.get(name) or []
+            if not items:
+                continue
+            out.append(f"## {titles[name]}")
+            for it in items:
+                line = f"- {it.text}"
+                if provenance and name != "working":
+                    line += f" [{it.provenance()}]"
+                out.append(line)
+        if self.open_questions:
+            out.append("## Open questions")
+            out.extend(f"- {q.question}" for q in self.open_questions)
+        return "\n".join(out)
+
+    def to_dict(self) -> dict:
+        from dataclasses import asdict
+
+        return asdict(self)
 
 
 @dataclass
@@ -594,6 +1009,7 @@ class SearchResponse(list):
 
 __all__ = [
     "COMMUNITY_LABEL",
+    "DEFAULT_ROOTS",
     "DERIVED_FROM_EDGE",
     "ENTITY_LABEL",
     "EPISODE_LABEL",
@@ -602,26 +1018,42 @@ __all__ = [
     "LEADS_TO_EDGE",
     "MEMORY_LABEL",
     "MENTIONS_EDGE",
+    "META_LABEL",
     "NEXT_EPISODE_EDGE",
+    "OPEN_DECISION_LABEL",
     "PRODUCED_EDGE",
     "RELATION_EDGE",
+    "SCHEMA_VERSION",
+    "SCOPE_OF_EDGE",
     "SUPERSEDES_EDGE",
+    "TAXONOMY_LABEL",
     "AddResult",
+    "BucketConfig",
     "CommunityInfo",
+    "CompileConfig",
+    "ContextBlock",
+    "ContextItem",
     "EntitiesOutput",
     "Entity",
     "EntityItem",
     "EpisodeResult",
+    "EpisodicConfig",
     "ExplainResult",
     "ExplainStep",
     "ExtractionResult",
     "Fact",
     "FactsOutput",
+    "GrowthConfig",
+    "InstanceScopeConfig",
     "MemoryAction",
     "MemoryConfig",
     "MemoryEvent",
     "MemoryStats",
     "MemoryType",
+    "OntologyConfig",
+    "OpenDecision",
+    "PolicyConfig",
+    "ProceduralConfig",
     "ReconciliationDecision",
     "ReconciliationItem",
     "ReconciliationOutput",
@@ -629,6 +1061,11 @@ __all__ = [
     "RelationDeleteItem",
     "RelationItem",
     "RelationReconciliationOutput",
+    "RetrievalConfig",
+    "RootSpec",
     "SearchResponse",
     "SearchResult",
+    "TaxonomyConfig",
+    "TiersConfig",
+    "WorkingConfig",
 ]

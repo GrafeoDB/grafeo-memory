@@ -64,7 +64,8 @@ class ConceptScheme:
     scheme_id: str = "memory"
     concepts: dict[str, Concept] = field(default_factory=dict)
     _children: dict[str | None, list[str]] = field(default_factory=dict)
-    _alias_index: dict[str, str] = field(default_factory=dict)  # normalized alias -> concept id
+    # normalized alias -> concept ids in insertion order (one alias may name concepts of several types)
+    _alias_index: dict[str, list[str]] = field(default_factory=dict)
     _pref_index: dict[tuple[str, str], str] = field(default_factory=dict)  # (pref_label, entity_type) -> id
 
     def add_concept(
@@ -78,6 +79,7 @@ class ConceptScheme:
         related: tuple[str, ...] | list[str] = (),
         exact_match: tuple[str, ...] | list[str] = (),
     ) -> Concept:
+        """Add a concept; re-adding an existing id replaces it and its index entries."""
         if broader is not None and broader not in self.concepts:
             raise KeyError(f"broader concept {broader!r} not in scheme")
         c = Concept(
@@ -90,13 +92,51 @@ class ConceptScheme:
             related=tuple(related),
             exact_match=tuple(exact_match),
         )
-        self.concepts[id] = c
-        self._children.setdefault(broader, []).append(id)
-        self._pref_index[(pref_label, entity_type)] = id
-        for alias in (id, *c.alt_labels, c.notation or "", *(c.exact_match or ()), pref_label):
-            if alias:
-                self._alias_index.setdefault(normalize_key(alias), id)
+        self.put(c)
         return c
+
+    def put(self, c: Concept) -> None:
+        """Insert or replace ``c`` with all its index entries (no broader check)."""
+        if c.id in self.concepts:
+            self._unindex(c.id)
+        self.concepts[c.id] = c
+        self._children.setdefault(c.broader, []).append(c.id)
+        self._pref_index[(c.pref_label, c.entity_type)] = c.id
+        for alias in (c.id, *c.alt_labels, c.notation or "", *c.exact_match, c.pref_label):
+            self.add_alias(c.id, alias)
+
+    def add_alias(self, cid: str, alias: str) -> None:
+        """Index ``alias`` for ``cid``. Aliases without a letter or digit a key can hold are skipped."""
+        key = normalize_key(alias) if alias else ""
+        if not key:
+            return
+        ids = self._alias_index.setdefault(key, [])
+        if cid not in ids:
+            ids.append(cid)
+
+    def remove_concept(self, cid: str) -> Concept | None:
+        """Drop ``cid`` and its index entries. Its own children list is left to the caller."""
+        if cid not in self.concepts:
+            return None
+        self._unindex(cid)
+        return self.concepts.pop(cid)
+
+    def _unindex(self, cid: str) -> None:
+        old = self.concepts[cid]
+        siblings = self._children.get(old.broader)
+        if siblings is not None and cid in siblings:
+            siblings.remove(cid)
+        if self._pref_index.get((old.pref_label, old.entity_type)) == cid:
+            del self._pref_index[(old.pref_label, old.entity_type)]
+        for key in [k for k, ids in self._alias_index.items() if cid in ids]:
+            self._alias_index[key].remove(cid)
+            if not self._alias_index[key]:
+                del self._alias_index[key]
+
+    def alias_hits(self, text: str) -> set[str]:
+        """Concepts whose alias occurs in ``text`` as whole words (first concept per alias)."""
+        qn = f" {normalize_key(text)} "
+        return {ids[0] for alias, ids in self._alias_index.items() if f" {alias} " in qn}
 
     def lookup_pref(self, label: str, entity_type: str | None = None) -> str | None:
         """Rung 1: exact prefLabel match, optionally typed by entity_type."""
@@ -113,18 +153,22 @@ class ConceptScheme:
         """Rung 2: normalized altLabel / notation / exactMatch / prefLabel. With
         ``entity_type``, only a concept of that type matches ("Apple" the company
         never resolves to "apple" the preference)."""
-        cid = self._alias_index.get(normalize_key(text))
-        if cid is not None and entity_type is not None:
+        ids = self._alias_index.get(normalize_key(text), [])
+        if entity_type is None:
+            return ids[0] if ids else None
+        for cid in ids:
             c = self.concepts.get(cid)
-            if c is not None and c.entity_type and c.entity_type != entity_type:
-                return None
-        return cid
+            if c is not None and (not c.entity_type or c.entity_type == entity_type):
+                return cid
+        return None
 
     def narrower(self, cid: str, depth: int = 2) -> list[str]:
         """Descendants of cid, capped at depth levels (deterministic order)."""
         out: list[str] = []
         frontier = [cid]
         for _ in range(max(0, depth)):
+            if not frontier:
+                break
             nxt: list[str] = []
             for node in frontier:
                 for child in self._children.get(node, ()):
@@ -143,7 +187,7 @@ class ConceptScheme:
         return out
 
     def expand(self, cids: list[str], depth: int = 2, direction: str = "down") -> list[str]:
-        """SKOS expansion for retrieval: self + narrower (down) or + broader (up)."""
+        """SKOS expansion for retrieval: self + narrower (down) or + broader (up), ``depth`` levels."""
         out: list[str] = []
         seen: set[str] = set()
         for cid in cids:
@@ -157,7 +201,7 @@ class ConceptScheme:
                         seen.add(d)
                         out.append(d)
             elif direction == "up":
-                for a in self.broader_path(cid):
+                for a in self.broader_path(cid)[: max(0, depth)]:
                     if a not in seen:
                         seen.add(a)
                         out.append(a)
@@ -172,11 +216,5 @@ class ConceptScheme:
     def from_dict(cls, d: dict) -> ConceptScheme:
         scheme = cls(scheme_id=d.get("scheme_id", "memory"))
         for cd in d.get("concepts", []):
-            c = Concept.from_dict(cd)
-            scheme.concepts[c.id] = c
-            scheme._children.setdefault(c.broader, []).append(c.id)
-            scheme._pref_index[(c.pref_label, c.entity_type)] = c.id
-            for alias in (c.id, *c.alt_labels, c.notation or "", *c.exact_match, c.pref_label):
-                if alias:
-                    scheme._alias_index.setdefault(normalize_key(alias), c.id)
+            scheme.put(Concept.from_dict(cd))
         return scheme

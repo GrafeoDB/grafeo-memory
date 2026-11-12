@@ -17,12 +17,12 @@ and SKOS/Allen precompute come with the full Layer E.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 
 from grafeo_memory.common.types import ENTITY_LABEL, RELATION_EDGE
 from grafeo_memory.core._graph import detach_delete_node
-from grafeo_memory.core.ontology.normalize import cosine
-from grafeo_memory.core.ontology.types import is_violation
+from grafeo_memory.core.ontology.types import coerce_entity_type, is_violation
 from grafeo_memory.core.protocol import GrafeoDBProtocol
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,11 @@ class CompileResult:
     merges: list[Merge] = field(default_factory=list)
     relation_violations: list[dict] = field(default_factory=list)
     edges_added: int = 0
+    # Pairs in [propose_threshold, merge_threshold): candidates for a user-certified merge.
+    proposals: list[dict] = field(default_factory=list)
+    taxonomy: dict = field(default_factory=dict)  # Layer B growth (generated children)
+    retention_expired: int = 0  # Layer F lifecycle TTLs
+    bucket: dict = field(default_factory=dict)  # Layer G: expired / self-resolved counts
 
 
 def _entity_rows(db: GrafeoDBProtocol, user_id: str, graph_name: str | None) -> list[dict]:
@@ -93,7 +98,8 @@ def _has_same_edge(db: GrafeoDBProtocol, src: int, dst: int, label: str, props: 
 
 def _merge_into(db: GrafeoDBProtocol, alias_id: int, canon_id: int) -> int:
     """Move alias's edges onto canon with their properties (no exact duplicates, no
-    self-loops), then delete alias."""
+    self-loops), carry the names merged into alias before onto canon, then delete alias."""
+    _record_merged_names(db, canon_id, _merged_names(db, alias_id))
     added = 0
     out, inc = _edges_of(db, alias_id)
     for lbl, other, props in out:
@@ -112,14 +118,40 @@ def _merge_into(db: GrafeoDBProtocol, alias_id: int, canon_id: int) -> int:
     return added
 
 
-def _record_merged_name(db: GrafeoDBProtocol, canon_id: int, alias_name: str) -> None:
-    """Keep the alias's name on the survivor (``merged_from``), so write-time
-    normalization (rung 2) resolves a later mention of it to this entity."""
-    rows = db.execute("MATCH (e) WHERE id(e) = $id RETURN e.merged_from AS m", {"id": canon_id})
+def _merged_names(db: GrafeoDBProtocol, node_id: int) -> list[str]:
+    rows = db.execute("MATCH (e) WHERE id(e) = $id RETURN e.merged_from AS m", {"id": node_id})
     current = rows[0].get("m") if rows and isinstance(rows[0], dict) else None
-    names = [str(x) for x in current] if isinstance(current, list) else []
-    if alias_name not in names:
-        db.set_node_property(canon_id, "merged_from", [*names, alias_name])
+    return [str(x) for x in current] if isinstance(current, list) else []
+
+
+def _record_merged_names(db: GrafeoDBProtocol, canon_id: int, alias_names: list[str]) -> None:
+    """Keep merged-away names on the survivor (``merged_from``), so write-time
+    normalization (rung 2) resolves a later mention of any of them to this entity."""
+    names = _merged_names(db, canon_id)
+    added = [n for n in dict.fromkeys(alias_names) if n and n not in names]
+    if added:
+        db.set_node_property(canon_id, "merged_from", [*names, *added])
+
+
+def _record_merged_name(db: GrafeoDBProtocol, canon_id: int, alias_name: str) -> None:
+    _record_merged_names(db, canon_id, [alias_name])
+
+
+def _type_key(etype: object) -> str:
+    """Group key for an entity type: a controlled type in its canonical spelling, else the raw string."""
+    et = coerce_entity_type(str(etype or ""))
+    return et.value if et is not None else str(etype or "")
+
+
+def _unit(v: list[float]) -> list[float] | None:
+    norm = math.sqrt(sum(x * x for x in v))
+    return [x / norm for x in v] if norm else None
+
+
+def _dot(a: list[float] | None, b: list[float] | None) -> float:
+    if a is None or b is None or len(a) != len(b):
+        return 0.0
+    return sum(x * y for x, y in zip(a, b, strict=True))
 
 
 def compile_graph(
@@ -128,6 +160,7 @@ def compile_graph(
     embedder=None,
     *,
     merge_threshold: float = 0.92,
+    propose_threshold: float | None = None,
     graph_name: str | None = None,
 ) -> CompileResult:
     """One offline compile pass over the user's entity graph. Deterministic rungs
@@ -140,24 +173,40 @@ def compile_graph(
     # Rung 3: type-constrained embedding similarity between distinct entities.
     if embedder is not None and len(rows) > 1:
         names = [str(r["name"]) for r in rows]
-        vecs = embedder.embed(names)
+        # Unit vectors once, so each pair is one dot product (cosine similarity).
+        vecs = [_unit([float(x) for x in v]) for v in embedder.embed(names)]
         merged_away: set[int] = set()
         # Only entities of one type in one graph_name scope may merge: compare within
-        # those groups instead of across every pair.
+        # those groups instead of across every pair ("Person" and "person" are one type).
         groups: dict[tuple[str, object], list[int]] = {}
         for idx, row in enumerate(rows):
-            groups.setdefault((str(row.get("etype") or ""), row.get("gn")), []).append(idx)
+            groups.setdefault((_type_key(row.get("etype")), row.get("gn")), []).append(idx)
         for i, r in enumerate(rows):
             if int(r["nid"]) in merged_away:
                 continue
             best_j, best_s = -1, 0.0
-            for j in groups[(str(r.get("etype") or ""), r.get("gn"))]:
+            for j in groups[(_type_key(r.get("etype")), r.get("gn"))]:
                 r2 = rows[j]
                 if i == j or int(r2["nid"]) in merged_away:
                     continue
-                s = cosine(vecs[i], vecs[j])
+                s = _dot(vecs[i], vecs[j])
                 if s > best_s:
                     best_j, best_s = j, s
+            if (
+                best_j >= 0
+                and propose_threshold is not None
+                and propose_threshold <= best_s < merge_threshold
+                and int(r["nid"]) < int(rows[best_j]["nid"])  # each pair once, older node as canonical
+            ):
+                res.proposals.append(
+                    {
+                        "alias": str(rows[best_j]["name"]),
+                        "canonical": str(r["name"]),
+                        "alias_id": int(rows[best_j]["nid"]),
+                        "canon_id": int(r["nid"]),
+                        "score": round(best_s, 4),
+                    }
+                )
             if best_j >= 0 and best_s >= merge_threshold:
                 # Keep the older (lower-id) node as the canonical survivor.
                 if int(r["nid"]) < int(rows[best_j]["nid"]):

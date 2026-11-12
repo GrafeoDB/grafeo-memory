@@ -79,8 +79,8 @@ def test_compile_noop_on_empty_graph():
     assert res.merges == [] and res.relation_violations == []
 
 
-def test_manager_compile_toggle_and_method():
-    """PipelineConfig.compile is wired: MemoryManager.compile() runs the pass."""
+def test_manager_compile_runs_one_pass():
+    """MemoryManager.compile() runs one compile pass and returns its CompileResult."""
     from mock_llm import MockEmbedder, make_test_model
 
     from grafeo_memory import MemoryConfig, MemoryManager, PipelineConfig
@@ -132,3 +132,20 @@ def test_compile_never_merges_across_graph_name_scopes():
 
     assert res.merges == []
     assert db.get_node(work.id) is not None and db.get_node(home.id) is not None
+
+
+def test_compile_carries_names_merged_into_the_alias():
+    db = grafeo.GrafeoDB()
+    canon = _mk_entity(db, "Alice", "Person")
+    alias = _mk_entity(db, "alice", "Person")
+    db.set_node_property(alias["id"], "merged_from", ["Ally"])
+    compile_graph(db, "u", embedder=StubEmbedder({"Alice", "alice"}), merge_threshold=0.9)
+    assert list(db.get_node(canon["id"]).properties()["merged_from"]) == ["Ally", "alice"]
+
+
+def test_compile_compares_type_spellings_as_one_type():
+    db = grafeo.GrafeoDB()
+    _mk_entity(db, "Alice", "Person")
+    _mk_entity(db, "alice", "person")
+    res = compile_graph(db, "u", embedder=StubEmbedder({"Alice", "alice"}), merge_threshold=0.9)
+    assert len(res.merges) == 1 and res.entities_after == 1

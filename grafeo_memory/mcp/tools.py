@@ -386,3 +386,152 @@ async def memory_explain_search(
         )
     except Exception as exc:
         return json.dumps({"error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# Layers A, B and G: context assembly, instructions, roots, open decisions
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def memory_open_decisions(
+    status: str = "open",
+    kind: str | None = None,
+    ask: bool = False,
+    user_id: str | None = None,
+    ctx: Context[AppContext, ServerSession] | None = None,
+) -> str:
+    """List questions the memory parked because it was not sure (the open-decisions bucket).
+
+    Use this tool when: you can relay a question to the person, for example "is
+    Alice still at Acme, or did she move to Beta?". With ask=True only questions
+    worth an interruption are returned, and they are marked as asked.
+
+    Args:
+        status: "open" (default, includes asked), "resolved", "expired", or null for all.
+        kind: Filter by kind: contradiction, duplicate, entity_identity, entity_merge, root_migration.
+        ask: Only questions above the importance floor; marks them asked.
+        user_id: Uses the server default if omitted.
+
+    Returns:
+        JSON with decisions (id, kind, question, options, evidence, proposed, confidence).
+    """
+    assert ctx is not None
+    manager = ctx.request_context.lifespan_context.manager
+    try:
+        ods = manager.list_open_decisions(status, kind, ask=ask, user_id=user_id)
+        return json.dumps({"decisions": [asdict(o) for o in ods]}, default=str)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def memory_resolve_decision(
+    decision_id: str,
+    answer: str,
+    ctx: Context[AppContext, ServerSession] | None = None,
+) -> str:
+    """Answer a parked question with one of its options; the answer is stored as ground truth.
+
+    Args:
+        decision_id: The id from memory_open_decisions.
+        answer: One of the decision's options (for a contradiction: replace,
+            invalidate, keep_both or duplicate).
+
+    Returns:
+        JSON with resolved (true when the answer was applied).
+    """
+    assert ctx is not None
+    manager = ctx.request_context.lifespan_context.manager
+    try:
+        return json.dumps({"resolved": bool(manager.resolve_open_decision(decision_id, answer))})
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def memory_manage_roots(
+    add: dict[str, str] | None = None,
+    rename: dict[str, str] | None = None,
+    retire: list[str] | None = None,
+    hard: dict[str, bool] | None = None,
+    user_id: str | None = None,
+    ctx: Context[AppContext, ServerSession] | None = None,
+) -> str:
+    """View or edit the subject roots that scope memories (career, health, ...).
+
+    With no arguments, returns the current tree. Retiring a root never deletes
+    memories: they stay, and a question asks where they belong.
+
+    Args:
+        add: New roots, id -> label (e.g. {"pets": "Pets"}).
+        rename: id -> new label (the old label keeps working).
+        retire: Root ids to retire.
+        hard: id -> true to wall a root off from searches that do not route to it.
+        user_id: Uses the server default if omitted.
+
+    Returns:
+        JSON with the scope tree and the changes made.
+    """
+    assert ctx is not None
+    manager = ctx.request_context.lifespan_context.manager
+    try:
+        changes = None
+        if add or rename or retire or hard:
+            changes = manager.set_root_scheme(add=add, rename=rename, retire=retire, hard=hard, user_id=user_id)
+        return json.dumps({"changes": changes, "scopes": manager.scopes(user_id=user_id)}, default=str)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def memory_assemble(
+    query: str,
+    session_id: str | None = None,
+    budget: int | None = None,
+    user_id: str | None = None,
+    ctx: Context[AppContext, ServerSession] | None = None,
+) -> str:
+    """Assemble a prompt-ready context block for a query: session window, instructions,
+    facts and past events within a token budget, each line with its provenance.
+
+    Args:
+        query: What the context is for.
+        session_id: The session whose working window goes first.
+        budget: Token budget (defaults to the configured working-tier budget).
+        user_id: Uses the server default if omitted.
+
+    Returns:
+        JSON with text (rendered block), tokens and sections.
+    """
+    assert ctx is not None
+    manager = ctx.request_context.lifespan_context.manager
+    try:
+        block = await manager.assemble(query, session_id, budget, user_id=user_id)
+        return json.dumps({"text": block.render(), "tokens": block.tokens, "block": block.to_dict()}, default=str)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def memory_add_instruction(
+    text: str,
+    user_id: str | None = None,
+    ctx: Context[AppContext, ServerSession] | None = None,
+) -> str:
+    """Store a standing instruction from the user ("always answer in Dutch"), certified.
+
+    Args:
+        text: The instruction as the user stated it.
+        user_id: Uses the server default if omitted.
+
+    Returns:
+        JSON with the stored event.
+    """
+    assert ctx is not None
+    manager = ctx.request_context.lifespan_context.manager
+    try:
+        event = await manager.add_instruction(text, user_id=user_id)
+        return json.dumps({"event": _serialize(event)}, default=str)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
