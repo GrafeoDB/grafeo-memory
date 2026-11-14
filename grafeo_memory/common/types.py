@@ -381,6 +381,8 @@ class WorkingConfig:
     # True: add() only buffers the session and end_session() runs extraction once
     # over the window. False: add() extracts as today and the window is context only.
     defer_extraction: bool = False
+    # Seconds an anonymous session (start_session(anonymous=True)) is kept after its last turn.
+    session_ttl: float = 3600.0
 
 
 @dataclass

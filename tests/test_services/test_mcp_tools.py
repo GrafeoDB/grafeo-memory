@@ -108,6 +108,15 @@ class TestMemoryAdd:
         assert call_name == "add"
         assert call_args == {"text": "alice likes pizza", "user_id": None, "memory_type": "semantic", "infer": True}
 
+    def test_agent_writes_are_notes_by_default(self):
+        from grafeo_memory.mcp.tools import memory_add
+
+        ctx, mgr = _make_ctx()
+        asyncio.run(memory_add("the user prefers uv over pip", ctx=ctx))
+        assert mgr.add_kw == {"session_id": None, "speaker": None, "source": "notes"}
+        asyncio.run(memory_add("I prefer uv", speaker="Alice", source="chat", ctx=ctx))
+        assert mgr.add_kw == {"session_id": None, "speaker": "Alice", "source": "chat"}
+
     def test_with_user_and_type(self):
         from grafeo_memory.mcp.tools import memory_add
 

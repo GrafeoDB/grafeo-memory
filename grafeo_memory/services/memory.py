@@ -205,6 +205,8 @@ class _MemoryCore:
         self._hub_cache: dict[str, tuple[tuple[int, float], set[str]]] = {}
         self._write_version = 0
         self._windows: dict[str, list[dict]] = {}
+        # start_session() registry: session id -> (bound user, or None while anonymous; last turn)
+        self._sessions: dict[str, tuple[str | None, float]] = {}
         self._summaries: dict[str, str] = {}
         self._adds_since_compile = 0
         self._concept_vectors: dict[str, list[float]] = {}
@@ -435,6 +437,13 @@ class _MemoryCore:
 
         text, parsed, images = parse_messages(messages)
         actor_id, role = _extract_actor(parsed)
+
+        from grafeo_memory.services import tiers as _tiers
+
+        if not _from_window and _tiers.is_anonymous(self, sid):
+            # An anonymous session never writes long-term memory: its turns stay in its window.
+            _tiers.buffer_anonymous(self, sid, list(parsed))  # ty: ignore[invalid-argument-type]
+            return AddResult(usage=total)
 
         # Vision: convert images to text descriptions via LLM
         if images and self._config.enable_vision:
@@ -3527,22 +3536,35 @@ class MemoryManager(_MemoryCore):
         instructions, facts and events within ``budget`` tokens, with provenance."""
         from grafeo_memory.services import tiers
 
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         return run_sync(tiers.assemble(self, query, uid, session_id or self._config.session_id, budget, k))
+
+    def start_session(self, session_id: str | None = None, *, anonymous: bool = False) -> str:
+        """Start a session and return its id (a new uuid when ``session_id`` is None).
+
+        ``anonymous=True``: the session only buffers its turns in memory; ``add(session_id=...)``
+        never writes long-term memory, ``assemble()`` returns the window alone, ``end_session()``
+        discards it, and it expires ``tiers.working.session_ttl`` seconds after its last turn.
+        Otherwise the session belongs to this manager's user (use ``for_user()``); starting an
+        anonymous session this way binds it to that user, one way, and stores its turns.
+        """
+        from grafeo_memory.services import tiers
+
+        return run_sync(tiers.start_session(self, self._uid(None), session_id, anonymous))
 
     def end_session(self, session_id: str | None = None, *, user_id: str | None = None) -> AddResult:
         """Layer A: promote the session window into long-term memory (extraction when
         ``defer_extraction``) and store its summary as an episodic memory."""
         from grafeo_memory.services import tiers
 
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         return run_sync(tiers.end_session(self, uid, session_id or self._config.session_id))
 
     def add_instruction(self, text: str, *, user_id: str | None = None) -> MemoryEvent:
         """Layer A: store a standing instruction as a certified procedural memory."""
         from grafeo_memory.services import tiers
 
-        return run_sync(tiers.add_instruction(self, text, user_id or self._config.user_id))
+        return run_sync(tiers.add_instruction(self, text, self._uid(user_id)))
 
     def certify(self, memory_id: str, certified: bool = True) -> bool:
         """Layer E: mark a memory certified (user-confirmed), or back to inferred."""
@@ -3880,22 +3902,28 @@ class AsyncMemoryManager(_MemoryCore):
         instructions, facts and events within ``budget`` tokens, with provenance."""
         from grafeo_memory.services import tiers
 
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         return await tiers.assemble(self, query, uid, session_id or self._config.session_id, budget, k)
+
+    async def start_session(self, session_id: str | None = None, *, anonymous: bool = False) -> str:
+        """Start a session and return its id; see ``MemoryManager.start_session``."""
+        from grafeo_memory.services import tiers
+
+        return await tiers.start_session(self, self._uid(None), session_id, anonymous)
 
     async def end_session(self, session_id: str | None = None, *, user_id: str | None = None) -> AddResult:
         """Layer A: promote the session window into long-term memory (extraction when
         ``defer_extraction``) and store its summary as an episodic memory."""
         from grafeo_memory.services import tiers
 
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         return await tiers.end_session(self, uid, session_id or self._config.session_id)
 
     async def add_instruction(self, text: str, *, user_id: str | None = None) -> MemoryEvent:
         """Layer A: store a standing instruction as a certified procedural memory."""
         from grafeo_memory.services import tiers
 
-        return await tiers.add_instruction(self, text, user_id or self._config.user_id)
+        return await tiers.add_instruction(self, text, self._uid(user_id))
 
     def certify(self, memory_id: str, certified: bool = True) -> bool:
         """Layer E: mark a memory certified (user-confirmed), or back to inferred."""

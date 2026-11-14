@@ -558,6 +558,59 @@ async def memory_assemble(
 
 
 @mcp.tool()
+async def memory_session_start(
+    session_id: str | None = None,
+    anonymous: bool = False,
+    user_id: str | None = None,
+    ctx: Context[AppContext, ServerSession] | None = None,
+) -> str:
+    """Start a conversation session and get its id.
+
+    Use this tool when: a conversation begins, or a user signs in during one.
+    An anonymous session keeps its turns in memory only and never writes long-term memory;
+    starting the same session_id again without ``anonymous`` binds it to the user and stores
+    its turns. Pass the id to memory_add, memory_assemble and memory_session_end.
+
+    Args:
+        session_id: Reuse or bind this id; a new one is made when omitted.
+        anonymous: True for a visitor who is not signed in.
+        user_id: The user a bound session belongs to. Uses server default if omitted.
+
+    Returns:
+        JSON with session_id.
+    """
+    manager = _manager(ctx, user_id)
+    try:
+        sid = await manager.start_session(session_id, anonymous=anonymous)
+        return json.dumps({"session_id": sid})
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def memory_session_end(
+    session_id: str,
+    user_id: str | None = None,
+    ctx: Context[AppContext, ServerSession] | None = None,
+) -> str:
+    """End a session: a bound one is promoted to long-term memory, an anonymous one is discarded.
+
+    Args:
+        session_id: The id from memory_session_start.
+        user_id: The session's user. Uses server default if omitted.
+
+    Returns:
+        JSON with the events the promotion stored.
+    """
+    manager = _manager(ctx, user_id)
+    try:
+        events = await manager.end_session(session_id)
+        return json.dumps({"events": [_serialize(e) for e in events]}, default=str)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
 async def memory_add_instruction(
     text: str,
     user_id: str | None = None,
