@@ -5,12 +5,23 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mcp.server.mcpserver import Context
 from mcp.server.session import ServerSession
 
 from grafeo_memory.mcp.server import AppContext, mcp
+
+if TYPE_CHECKING:
+    from grafeo_memory.services.memory import AsyncMemoryManager
+
+
+def _manager(ctx: Context[AppContext, ServerSession] | None, user_id: str | None) -> AsyncMemoryManager:
+    """The server's manager bound to one user (``user_id``, else the server default), so a
+    tool call reaches that user's memories only, by id too."""
+    assert ctx is not None
+    base = ctx.request_context.lifespan_context.manager
+    return base.for_user(user_id or base._config.user_id)
 
 
 def _serialize(obj: Any) -> dict:
@@ -62,9 +73,17 @@ async def memory_add(
         memory_add("Raw note to store", infer=False)
     """
     assert ctx is not None
-    manager = ctx.request_context.lifespan_context.manager
+    manager = _manager(ctx, user_id)
     try:
-        events = await manager.add(text, user_id=user_id, memory_type=memory_type, infer=infer)
+        events = await manager.add(
+            text,
+            user_id=user_id,
+            session_id=session_id,
+            memory_type=memory_type,
+            infer=infer,
+            speaker=speaker,
+            source=source,
+        )
         return json.dumps({"events": [_serialize(e) for e in events]}, default=str)
     except Exception as exc:
         return json.dumps({"error": str(exc)})
@@ -100,9 +119,16 @@ async def memory_add_batch(
         memory_add_batch(["Alice likes pizza", "Bob works at Google"])
     """
     assert ctx is not None
-    manager = ctx.request_context.lifespan_context.manager
+    manager = _manager(ctx, user_id)
     try:
-        events = await manager.add_batch(texts, user_id=user_id, memory_type=memory_type, infer=infer)  # ty: ignore[invalid-argument-type]
+        events = await manager.add_batch(
+            texts,  # ty: ignore[invalid-argument-type]
+            user_id=user_id,
+            memory_type=memory_type,
+            infer=infer,
+            speaker=speaker,
+            source=source,
+        )
         return json.dumps({"events": [_serialize(e) for e in events]}, default=str)
     except Exception as exc:
         return json.dumps({"error": str(exc)})
@@ -141,7 +167,7 @@ async def memory_search(
         memory_search("python preferences", memory_type="procedural")
     """
     assert ctx is not None
-    manager = ctx.request_context.lifespan_context.manager
+    manager = _manager(ctx, user_id)
     try:
         results = await manager.search(
             query, user_id=user_id, k=k, memory_type=memory_type, min_score=min_score, point_in_time=point_in_time
@@ -155,6 +181,7 @@ async def memory_search(
 async def memory_update(
     memory_id: str,
     text: str,
+    user_id: str | None = None,
     ctx: Context[AppContext, ServerSession] | None = None,
 ) -> str:
     """Update an existing memory's text. Re-embeds and records history.
@@ -165,6 +192,7 @@ async def memory_update(
     Args:
         memory_id: The ID of the memory to update.
         text: The new text for the memory.
+        user_id: The memory's user. Uses server default if omitted; another user's memory is not found.
 
     Returns:
         JSON with the update event (action, memory_id, text, old_text).
@@ -173,7 +201,7 @@ async def memory_update(
         memory_update("42", "Alice now works at Google as a senior engineer")
     """
     assert ctx is not None
-    manager = ctx.request_context.lifespan_context.manager
+    manager = _manager(ctx, user_id)
     try:
         event = await manager.update(memory_id, text)
         return json.dumps({"event": _serialize(event)}, default=str)
@@ -184,6 +212,7 @@ async def memory_update(
 @mcp.tool()
 async def memory_delete(
     memory_id: str,
+    user_id: str | None = None,
     ctx: Context[AppContext, ServerSession] | None = None,
 ) -> str:
     """Delete a single memory by ID.
@@ -193,6 +222,7 @@ async def memory_delete(
 
     Args:
         memory_id: The ID of the memory to delete.
+        user_id: The memory's user. Uses server default if omitted; another user's memory is not found.
 
     Returns:
         JSON with success status.
@@ -201,7 +231,7 @@ async def memory_delete(
         memory_delete("42")
     """
     assert ctx is not None
-    manager = ctx.request_context.lifespan_context.manager
+    manager = _manager(ctx, user_id)
     try:
         ok = await manager.delete(memory_id)
         return json.dumps({"deleted": ok, "memory_id": memory_id})
@@ -230,7 +260,7 @@ async def memory_delete_all(
         memory_delete_all(user_id="alice")
     """
     assert ctx is not None
-    manager = ctx.request_context.lifespan_context.manager
+    manager = _manager(ctx, user_id)
     try:
         count = await manager.delete_all(user_id=user_id)
         return json.dumps({"deleted_count": count})
@@ -262,7 +292,7 @@ async def memory_list(
         memory_list(memory_type="procedural")
     """
     assert ctx is not None
-    manager = ctx.request_context.lifespan_context.manager
+    manager = _manager(ctx, user_id)
     try:
         memories = await manager.get_all(user_id=user_id, memory_type=memory_type)
         return json.dumps({"memories": [_serialize(m) for m in memories]}, default=str)
@@ -296,7 +326,7 @@ async def memory_summarize(
         memory_summarize(preserve_recent=10)
     """
     assert ctx is not None
-    manager = ctx.request_context.lifespan_context.manager
+    manager = _manager(ctx, user_id)
     try:
         events = await manager.summarize(user_id=user_id, preserve_recent=preserve_recent, batch_size=batch_size)
         return json.dumps({"events": [_serialize(e) for e in events]}, default=str)
@@ -307,6 +337,7 @@ async def memory_summarize(
 @mcp.tool()
 async def memory_history(
     memory_id: str,
+    user_id: str | None = None,
     ctx: Context[AppContext, ServerSession] | None = None,
 ) -> str:
     """Show the change history for a specific memory.
@@ -317,6 +348,7 @@ async def memory_history(
 
     Args:
         memory_id: The ID of the memory to get history for.
+        user_id: The memory's user. Uses server default if omitted.
 
     Returns:
         JSON with history entries (each with event, old_text, new_text, timestamp).
@@ -325,7 +357,7 @@ async def memory_history(
         memory_history("42")
     """
     assert ctx is not None
-    manager = ctx.request_context.lifespan_context.manager
+    manager = _manager(ctx, user_id)
     try:
         entries = await manager.history(memory_id)
         return json.dumps({"history": [_serialize(e) for e in entries]}, default=str)
@@ -384,7 +416,7 @@ async def memory_explain_search(
         memory_explain_search("What does Alice do for work?")
     """
     assert ctx is not None
-    manager = ctx.request_context.lifespan_context.manager
+    manager = _manager(ctx, user_id)
     try:
         result = await manager.explain(query, user_id=user_id, k=k, memory_type=memory_type)
         return json.dumps(
@@ -428,7 +460,7 @@ async def memory_open_decisions(
         JSON with decisions (id, kind, question, options, evidence, proposed, confidence).
     """
     assert ctx is not None
-    manager = ctx.request_context.lifespan_context.manager
+    manager = _manager(ctx, user_id)
     try:
         ods = manager.list_open_decisions(status, kind, ask=ask, user_id=user_id)
         return json.dumps({"decisions": [asdict(o) for o in ods]}, default=str)
@@ -440,6 +472,7 @@ async def memory_open_decisions(
 async def memory_resolve_decision(
     decision_id: str,
     answer: str,
+    user_id: str | None = None,
     ctx: Context[AppContext, ServerSession] | None = None,
 ) -> str:
     """Answer a parked question with one of its options; the answer is stored as ground truth.
@@ -453,7 +486,7 @@ async def memory_resolve_decision(
         JSON with resolved (true when the answer was applied).
     """
     assert ctx is not None
-    manager = ctx.request_context.lifespan_context.manager
+    manager = _manager(ctx, user_id)
     try:
         return json.dumps({"resolved": bool(manager.resolve_open_decision(decision_id, answer))})
     except Exception as exc:
@@ -490,7 +523,7 @@ async def memory_manage_roots(
         changes = None
         if add or rename or retire or hard:
             changes = manager.set_root_scheme(add=add, rename=rename, retire=retire, hard=hard, user_id=user_id)
-        return json.dumps({"changes": changes, "scopes": manager.scopes(user_id=user_id)}, default=str)
+        return json.dumps({"changes": changes, "scopes": _manager(ctx, user_id).scopes()}, default=str)
     except Exception as exc:
         return json.dumps({"error": str(exc)})
 
@@ -516,7 +549,7 @@ async def memory_assemble(
         JSON with text (rendered block), tokens and sections.
     """
     assert ctx is not None
-    manager = ctx.request_context.lifespan_context.manager
+    manager = _manager(ctx, user_id)
     try:
         block = await manager.assemble(query, session_id, budget, user_id=user_id)
         return json.dumps({"text": block.render(), "tokens": block.tokens, "block": block.to_dict()}, default=str)
@@ -540,7 +573,7 @@ async def memory_add_instruction(
         JSON with the stored event.
     """
     assert ctx is not None
-    manager = ctx.request_context.lifespan_context.manager
+    manager = _manager(ctx, user_id)
     try:
         event = await manager.add_instruction(text, user_id=user_id)
         return json.dumps({"event": _serialize(event)}, default=str)

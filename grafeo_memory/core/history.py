@@ -42,7 +42,7 @@ MEMORY_ID_PROPERTY = "memory_id"
 
 _RETURN_FIELDS = (
     "RETURN id(h) AS hid, h.event AS event, h.old_text AS old_text, h.new_text AS new_text, "
-    "h.timestamp AS timestamp, h.actor_id AS actor_id, h.role AS role"
+    "h.timestamp AS timestamp, h.actor_id AS actor_id, h.role AS role, h.user_id AS user_id"
 )
 
 
@@ -147,6 +147,7 @@ def get_history(
     memory_node_id: int,
     *,
     graph_name: str | None = None,
+    user_id: str | None = None,
 ) -> list[HistoryEntry]:
     """Return the history of a memory, oldest first.
 
@@ -155,6 +156,8 @@ def get_history(
         memory_node_id: Node id of the memory (it may have been deleted since).
         graph_name: When set, only entries recorded under this ``graph_name``
             scope are returned.
+        user_id: When set, only entries recorded for this user are returned
+            (a ``for_user()`` view); entries without a recorded user are left out.
 
     Database errors are raised.
     """
@@ -193,6 +196,8 @@ def get_history(
     by_id: dict[int, dict] = {}
     for row in rows:
         if isinstance(row, dict) and row.get("hid") is not None:
+            if user_id is not None and row.get("user_id") != user_id:
+                continue
             by_id[int(row["hid"])] = row
 
     ordered = sorted(by_id.items(), key=lambda item: (int(item[1].get("timestamp") or 0), item[0]))

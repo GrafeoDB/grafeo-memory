@@ -162,6 +162,8 @@ def get(m: _MemoryCore, decision_id: str) -> OpenDecision | None:
         return None
     if m._config.graph_name and props.get("graph_name") != m._config.graph_name:
         return None
+    if m._tenant is not None and props.get("user_id") != m._tenant:
+        return None  # another user's decision: out of a for_user() view's reach
     return _from_props(int(decision_id), props)
 
 
@@ -295,10 +297,12 @@ def apply(m: _MemoryCore, od: OpenDecision, answer: str, by: str) -> bool:
                     m._db.create_edge(int(new_id), int(target), SUPERSEDES_EDGE)
                 except Exception:
                     logger.debug("bucket: SUPERSEDES %s->%s failed", new_id, target, exc_info=True)
+            node = m._db.get_node(int(target))
+            owner = _get_props(node).get("user_id") if node is not None else None
             m._record_history(
                 str(target),
                 HistoryEntry(event="UPDATE" if answer == REPLACE else "DELETE", old_text=old_text, timestamp=now),
-                m._config.user_id,
+                owner or m._config.user_id,
             )
             _clear_provisional(m, new_id)
         elif answer == KEEP_BOTH:

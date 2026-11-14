@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import json
 import logging
 import math
@@ -11,7 +12,7 @@ import time
 from collections.abc import Iterable
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import Literal, overload
+from typing import Literal, Self, overload
 
 from grafeo_memory.common.types import (
     DERIVED_FROM_EDGE,
@@ -72,12 +73,35 @@ from grafeo_memory.providers.embedding import EmbeddingClient
 logger = logging.getLogger(__name__)
 
 
+class _SharedState:
+    """Mutable scalars a manager shares with its ``for_user()`` views (the dicts are shared by reference)."""
+
+    def __init__(self) -> None:
+        self.write_version = 0
+        self.graph_dirty = False
+        self.vector_index_ready = False
+        self.adds_since_compile = 0
+        self.limit_warned_pct = 0.0
+        self.embedding_dims = 0
+
+
+def _shared(name: str) -> property:
+    return property(lambda self: getattr(self._shared, name), lambda self, v: setattr(self._shared, name, v))
+
+
 class _MemoryCore:
     """Shared initialization and async internal methods.
 
     Both MemoryManager (sync) and AsyncMemoryManager (async) inherit
     from this base. All orchestration logic lives here as async methods.
     """
+
+    _write_version = _shared("write_version")
+    _graph_dirty = _shared("graph_dirty")
+    _vector_index_ready = _shared("vector_index_ready")
+    _adds_since_compile = _shared("adds_since_compile")
+    _limit_warned_pct = _shared("limit_warned_pct")
+    _embedding_dims = _shared("embedding_dims")
 
     def __init__(
         self,
@@ -90,6 +114,8 @@ class _MemoryCore:
     ):
         import grafeo
 
+        self._shared = _SharedState()
+        self._tenant: str | None = None  # set on a for_user() view
         self._config = config or MemoryConfig()
         from grafeo_memory.providers.llm.retry import with_retries
 
@@ -255,7 +281,10 @@ class _MemoryCore:
         The async runner is intentionally NOT closed here, it is shared across
         sessions and cleaned up automatically at process exit via atexit. Closing
         it per-session corrupts httpx/anyio transport state on Windows.
+        A ``for_user()`` view closes nothing: the manager it came from owns the database.
         """
+        if self._tenant is not None:  # only for_user() sets it
+            return
         if self._cache is not None:
             self._cache.close()  # the cache is ours even when the database is not
         if self._db_external:
@@ -280,14 +309,39 @@ class _MemoryCore:
 
     # Ownership and history helpers
 
+    def _uid(self, user_id: str | None) -> str:
+        """The user a call acts for: the argument, else the configured user. A ``for_user()`` view
+        refuses any other user."""
+        if user_id and self._tenant is not None and user_id != self._tenant:
+            raise ValueError(f"this manager view is bound to user {self._tenant!r}, not {user_id!r}")
+        return user_id or self._config.user_id
+
+    def for_user(self, user_id: str) -> Self:
+        """A view of this manager bound to one user.
+
+        The view shares the database, caches and session state, acts for ``user_id`` in every
+        call, refuses calls naming another user, and reaches only that user's memories, history
+        and open decisions by id. ``close()`` on a view leaves the database open. The host
+        application verifies who the user is; grafeo-memory trusts the id it is given.
+        """
+        if not user_id:
+            raise ValueError("for_user() needs a user_id")
+        if self._tenant is not None and user_id != self._tenant:
+            raise ValueError(f"this manager view is bound to user {self._tenant!r}, not {user_id!r}")
+        view = copy.copy(self)
+        view._config = copy.copy(self._config)
+        view._config.user_id = user_id
+        view._tenant = user_id
+        return view
+
     def _owned_memory(self, memory_id: str | int) -> tuple[int, dict] | None:
         """Return ``(node_id, properties)`` when ``memory_id`` names a Memory node in this manager's scope.
 
         Anything else (an invalid id, a missing node, a node of another label in
         a shared database, a memory of another ``graph_name``, ``agent_id`` or
         ``run_id`` scope) gives None, so the public API never modifies or deletes
-        nodes it does not own. ``user_id`` is not checked: it is a per-call
-        partition (``add(user_id=...)``), and one manager serves every user id.
+        nodes it does not own. ``user_id`` is checked on a ``for_user()`` view only; the
+        unbound manager treats it as a per-call partition and serves every user id.
         """
         try:
             node_id = int(memory_id)
@@ -301,6 +355,8 @@ class _MemoryCore:
             scope = getattr(self._config, key)
             if scope and props.get(key) != scope:
                 return None
+        if self._tenant is not None and props.get("user_id") != self._tenant:
+            return None
         return node_id, props
 
     def _record_history(self, memory_id: str | int, entry: HistoryEntry, user_id: str | None) -> None:
@@ -372,7 +428,7 @@ class _MemoryCore:
         if source not in SOURCES:
             raise ValueError(f"source must be one of {SOURCES}, got {source!r}")
         on_usage, total = self._make_usage_collector()
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         sid = session_id or self._config.session_id
         now_ms = int(time.time() * 1000)
         mtype = MemoryType(memory_type) if isinstance(memory_type, str) else memory_type
@@ -624,7 +680,7 @@ class _MemoryCore:
         For infer=True: processes each message through the full extraction/reconciliation
         pipeline sequentially (reconciliation depends on prior state).
         """
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         sid = session_id or self._config.session_id
         now_ms = int(time.time() * 1000)
         mtype = MemoryType(memory_type) if isinstance(memory_type, str) else memory_type
@@ -1952,7 +2008,7 @@ class _MemoryCore:
         limit: int = 50,
     ) -> list[EpisodeResult]:
         """Retrieve episode nodes."""
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         try:
             nodes = self._db.get_nodes_by_label(EPISODE_LABEL)
         except Exception:
@@ -2010,6 +2066,8 @@ class _MemoryCore:
         try:
             mid = int(memory_id)
         except ValueError:
+            return []
+        if self._tenant is not None and self._owned_memory(mid) is None:
             return []
 
         try:
@@ -2130,6 +2188,10 @@ class _MemoryCore:
             List of dicts with memory_id, text, created_at, session_id.
         """
         mid = int(memory_id)
+        if self._tenant is not None:
+            if self._owned_memory(mid) is None:
+                return []
+            user_id = self._uid(user_id)
         user_filter = " AND rest.user_id = $uid" if user_id else ""
         graph_filter = " AND rest.graph_name = $gn" if self._config.graph_name else ""
         params: dict = {"mid": mid}
@@ -2607,7 +2669,7 @@ class _MemoryCore:
         include_expired: bool = False,
     ) -> list[SearchResult]:
         """Shared get_all implementation."""
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
 
         try:
             nodes = self._db.get_nodes_by_label(MEMORY_LABEL)
@@ -2684,7 +2746,7 @@ class _MemoryCore:
         from grafeo_memory.core.prompts import SUMMARIZE_SYSTEM, SUMMARIZE_USER
 
         on_usage, total = self._make_usage_collector()
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         now_ms = int(time.time() * 1000)
 
         memory_data = self._get_memories_with_timestamps(uid)
@@ -2754,12 +2816,26 @@ class _MemoryCore:
         except ValueError:
             return []
 
-        return get_history(self._db, node_id, graph_name=self._config.graph_name)
+        if self._tenant is None:
+            return get_history(self._db, node_id, graph_name=self._config.graph_name)
+        node = self._db.get_node(node_id)
+        if node is not None:
+            # the memory still exists: its whole history if it is the view's (legacy entries included)
+            if self._owned_memory(node_id) is None:
+                return []
+            return get_history(self._db, node_id, graph_name=self._config.graph_name)
+        # deleted with its node: only entries recorded for the view's user
+        return get_history(self._db, node_id, graph_name=self._config.graph_name, user_id=self._tenant)
 
     # --- Time travel (grafeo 0.6.2 history retention) ---
 
+    def _not_in_a_view(self, what: str) -> None:
+        if self._tenant is not None:
+            raise ValueError(f"{what} reads the whole database: call it on the manager, not a for_user() view")
+
     def _as_of_impl(self, point: int | datetime | timedelta):
         """A read-only view of the database as it was at *point*."""
+        self._not_in_a_view("as_of()")
         as_of = getattr(self._db, "as_of", None)
         if not callable(as_of):
             raise TypeError("time travel needs grafeo >= 0.6.2: the database passed with db= has no as_of()")
@@ -2769,6 +2845,7 @@ class _MemoryCore:
         self, query: str, point: int | datetime | timedelta, params: dict | None = None
     ) -> list[dict]:
         """Run one read-only GQL query as the database was at *point*."""
+        self._not_in_a_view("execute_as_of()")
         execute_as_of = getattr(self._db, "execute_as_of", None)
         if not callable(execute_as_of):
             raise TypeError("time travel needs grafeo >= 0.6.2: the database passed with db= has no execute_as_of()")
@@ -2780,11 +2857,17 @@ class _MemoryCore:
             node_id = int(memory_id)
         except ValueError:
             return None
-        with self._as_of_impl(point) as view:
+        as_of = getattr(self._db, "as_of", None)
+        if not callable(as_of):
+            raise TypeError("time travel needs grafeo >= 0.6.2: the database passed with db= has no as_of()")
+        with as_of(point) as view:
             node = view.get_node(node_id)
         if node is None:
             return None
-        return {"node_id": node.id, "labels": list(node.labels), "properties": node.properties()}
+        props = node.properties()
+        if self._tenant is not None and props.get("user_id") != self._tenant:
+            return None
+        return {"node_id": node.id, "labels": list(node.labels), "properties": props}
 
     def _check_db_memory_limit(self) -> None:
         """Warn once when engine memory usage crosses 95% of the configured limit.
@@ -3414,7 +3497,7 @@ class MemoryManager(_MemoryCore):
         """Get all detected communities and their summaries."""
         from grafeo_memory.core.communities import get_communities as _get_communities
 
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         return _get_communities(self._db, uid)
 
     def stats(self) -> MemoryStats:
@@ -3472,7 +3555,7 @@ class MemoryManager(_MemoryCore):
         floor and marks them asked (for an app that relays them to the user)."""
         from grafeo_memory.services import bucket
 
-        return bucket.list_decisions(self, user_id or self._config.user_id, status, kind, ask)
+        return bucket.list_decisions(self, self._uid(user_id), status, kind, ask)
 
     def resolve_open_decision(self, decision_id: str, answer: str) -> bool:
         """Layer G: answer a parked question; the answer is written back as ground truth."""
@@ -3482,7 +3565,7 @@ class MemoryManager(_MemoryCore):
         """Layer B: the subject tree (roots, generated children) and active instance scopes."""
         from grafeo_memory.services import scoping
 
-        return scoping.scopes(self, user_id or self._config.user_id)
+        return scoping.scopes(self, self._uid(user_id))
 
     def set_root_scheme(
         self,
@@ -3496,9 +3579,7 @@ class MemoryManager(_MemoryCore):
         """Layer B: add, rename, retire or harden subject roots (versioned; retiring never deletes)."""
         from grafeo_memory.services import scoping
 
-        return scoping.set_root_scheme(
-            self, user_id or self._config.user_id, add=add, rename=rename, retire=retire, hard=hard
-        )
+        return scoping.set_root_scheme(self, self._uid(user_id), add=add, rename=rename, retire=retire, hard=hard)
 
     def explain(
         self,
@@ -3769,7 +3850,7 @@ class AsyncMemoryManager(_MemoryCore):
         """Get all detected communities and their summaries."""
         from grafeo_memory.core.communities import get_communities as _get_communities
 
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         return _get_communities(self._db, uid)
 
     def stats(self) -> MemoryStats:
@@ -3827,7 +3908,7 @@ class AsyncMemoryManager(_MemoryCore):
         floor and marks them asked (for an app that relays them to the user)."""
         from grafeo_memory.services import bucket
 
-        return bucket.list_decisions(self, user_id or self._config.user_id, status, kind, ask)
+        return bucket.list_decisions(self, self._uid(user_id), status, kind, ask)
 
     def resolve_open_decision(self, decision_id: str, answer: str) -> bool:
         """Layer G: answer a parked question; the answer is written back as ground truth."""
@@ -3837,7 +3918,7 @@ class AsyncMemoryManager(_MemoryCore):
         """Layer B: the subject tree (roots, generated children) and active instance scopes."""
         from grafeo_memory.services import scoping
 
-        return scoping.scopes(self, user_id or self._config.user_id)
+        return scoping.scopes(self, self._uid(user_id))
 
     def set_root_scheme(
         self,
@@ -3851,9 +3932,7 @@ class AsyncMemoryManager(_MemoryCore):
         """Layer B: add, rename, retire or harden subject roots (versioned; retiring never deletes)."""
         from grafeo_memory.services import scoping
 
-        return scoping.set_root_scheme(
-            self, user_id or self._config.user_id, add=add, rename=rename, retire=retire, hard=hard
-        )
+        return scoping.set_root_scheme(self, self._uid(user_id), add=add, rename=rename, retire=retire, hard=hard)
 
     async def explain(
         self,

@@ -355,7 +355,8 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
         return
 
-    manager = _create_manager(args)
+    base = _create_manager(args)
+    manager = base.for_user(_user_id(args))  # commands by id reach this user's memories only
     try:
         handler = _COMMANDS[args.command]
         handler(manager, args)
@@ -369,4 +370,4 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     finally:
-        manager.close()
+        base.close()

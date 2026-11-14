@@ -23,8 +23,13 @@ class FakeManager:
     def __post_init__(self):
         self.calls = []
 
-    def add(self, text, *, memory_type="semantic", infer=True):
+    def for_user(self, user_id):
+        self.bound_user = user_id
+        return self
+
+    def add(self, text, *, memory_type="semantic", infer=True, speaker=None, source="chat"):
         self.calls.append(("add", text, memory_type, infer))
+        self.identity = (speaker, source)
         return [MemoryEvent(action=MemoryAction.ADD, memory_id="1", text=text)]
 
     def search(self, query, *, k=10, memory_type=None, min_score=None):
@@ -141,6 +146,14 @@ class TestAddCommand:
         assert fake_manager.calls[0] == ("add", "Alice works at Acme", "semantic", True)
         out = capsys.readouterr().out
         assert "ADD" in out
+
+    def test_add_speaker_and_source(self, capsys, fake_manager):
+        _run(["add", "I like tea"], fake_manager)
+        assert fake_manager.identity == (None, "chat")
+        _run(["add", "I like tea", "--speaker", "Alice"], fake_manager)
+        assert fake_manager.identity == ("Alice", "chat")
+        _run(["add", "grafeo tags are signed", "--source", "notes"], fake_manager)
+        assert fake_manager.identity == (None, "notes")
 
     def test_add_no_infer(self, capsys, fake_manager):
         _run(["add", "raw text", "--no-infer"], fake_manager)

@@ -380,6 +380,8 @@ def set_root_scheme(
     """Edit the designed roots at runtime. Retiring never deletes memories: they stay
     tagged and a ``root_migration`` open decision asks where they belong (bucket on),
     or they move to ``general`` (bucket off)."""
+    if m._tenant is not None:
+        raise ValueError("subject roots belong to the graph: edit them on the manager, not a for_user() view")
     from grafeo_memory.services import bucket
 
     tax = load(m, uid)
