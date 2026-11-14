@@ -228,7 +228,8 @@ class TestReconciliationTargetsAreCandidates:
         manager = _make_manager(
             [
                 {"facts": ["alice likes climbing"], "entities": [], "relations": []},
-                {"decisions": [{"action": "update", "text": "alice likes climbing", "target_memory_id": own_id}]},
+                # own_id is the only candidate for this user, shown to the model as "m1"
+                {"decisions": [{"action": "update", "text": "alice likes climbing", "target_memory_id": "m1"}]},
             ],
             db=db,
             reconciliation_threshold=0.0,
@@ -327,13 +328,15 @@ class TestDeleteAllIncludesExpired:
         second = _make_manager(
             [
                 {"facts": ["alice works at globex"], "entities": [], "relations": []},
-                {"decisions": [{"action": "update", "text": "alice works at globex", "target_memory_id": old_id}]},
+                # old_id is the only candidate, shown to the model as "m1"
+                {"decisions": [{"action": "update", "text": "alice works at globex", "target_memory_id": "m1"}]},
             ],
             db=db,
             reconciliation_threshold=0.0,
         )
-        second.add("Alice works at Globex")
+        assert [e.action for e in second.add("Alice works at Globex")] == [MemoryAction.UPDATE]
         assert len(second.get_all(include_expired=True)) == 2
+        assert old_id not in {m.memory_id for m in second.get_all()}  # superseded, not just alongside
 
         assert second.delete_all() == 2
 

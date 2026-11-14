@@ -2,6 +2,28 @@
 
 from __future__ import annotations
 
+# Bump on any prompt change that can change extraction or reconciliation results;
+# stats() reports it and benchmark runs record it, so runs on different prompts are never compared.
+PROMPTS_VERSION = 2
+
+SOURCES = ("chat", "notes")
+
+
+def speaker_line(speaker: str | None = None, source: str = "chat") -> str:
+    """The extraction prompt line that says who is talking. The user_id never enters a prompt."""
+    if source == "notes":
+        return (
+            "The text is notes or a document, not a conversation: state its facts as written, "
+            "about the people and things it names, with no speaker."
+        )
+    if speaker:
+        return f'The speaker is {speaker}: write facts about them as "{speaker}", never as "I".'
+    return (
+        "In a conversation each line starts with its speaker's name or role; text without labels "
+        'is the user speaking. Write facts about the user as "the user", never as "I".'
+    )
+
+
 FACT_EXTRACTION_SYSTEM = """\
 You are a memory extraction assistant. Your job is to extract discrete, \
 self-contained facts from conversation text.
@@ -18,7 +40,7 @@ Wes Montgomery's style" rather than three separate facts).
 - If the text contains no memorable facts, return an empty list."""
 
 FACT_EXTRACTION_USER = """\
-Extract facts from the following text. The speaker's user_id is "{user_id}".
+Extract facts from the following text. {speaker}
 
 Text:
 {text}"""
@@ -62,14 +84,13 @@ Wes Montgomery's style" rather than three separate facts).
 
 2. ENTITIES and RELATIONSHIPS from the facts you extracted.
    - Identify key entities (people, organizations, locations, concepts).
-   - Entity names should be lowercase with underscores for spaces (e.g., "acme_corp").
+   - Write entity names as they appear in the text (e.g., "Acme Corp", "New York").
    - Identify relationships between entities.
 
 If the text contains no memorable facts, return empty lists."""
 
 COMBINED_EXTRACTION_USER = """\
-Extract facts, entities, and relationships from the following text. \
-The speaker's user_id is "{user_id}".
+Extract facts, entities, and relationships from the following text. {speaker}
 
 Text:
 {text}"""
@@ -89,7 +110,7 @@ Extract two things:
 
 2. ENTITIES and RELATIONSHIPS from the extracted items.
    - Identify key entities (tools, technologies, people, concepts).
-   - Entity names should be lowercase with underscores for spaces.
+   - Write entity names as they appear in the text.
    - Identify relationships between entities.
 
 If the text contains no instructions or preferences, return empty lists."""
@@ -127,7 +148,7 @@ Extract two things:
 
 2. ENTITIES and RELATIONSHIPS from the interaction events.
    - Identify key entities (people, tools, topics, concepts).
-   - Entity names should be lowercase with underscores for spaces.
+   - Write entity names as they appear in the text.
    - Identify relationships between entities.
 
 If the text contains no notable interactions, return empty lists."""
@@ -140,11 +161,11 @@ You are an entity and relationship extraction assistant. Given a list of facts, 
 identify the key entities (people, organizations, locations, concepts, etc.) and \
 the relationships between them.
 
-Return all entities and relationships you find. Entity names should be lowercase and \
-use underscores for spaces (e.g., "acme_corp", "new_york")."""
+Return all entities and relationships you find. Write entity names as they appear in the \
+facts (e.g., "Acme Corp", "New York")."""
 
 ENTITY_EXTRACTION_USER = """\
-Extract entities and relationships from these facts (user_id: "{user_id}"):
+Extract entities and relationships from these facts:
 
 {facts}"""
 
@@ -248,7 +269,8 @@ Rules:
 or clearly implied.
 - For relative dates ("last week", "in 2020", "three months ago"), convert to \
 approximate ISO-8601 using the provided reference date.
-- If no temporal information is available for a fact, set valid_at to null.
+- If no temporal information is available for a fact, set valid_at to null. Never use \
+today's date for a fact whose text gives no date.
 - invalid_at should only be set when the text explicitly states the fact is no \
 longer true (e.g., "used to", "until", "stopped", "left in 2023").
 - Each annotation must reference a fact by its 0-based index.

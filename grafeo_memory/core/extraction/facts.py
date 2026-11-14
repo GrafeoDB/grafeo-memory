@@ -11,7 +11,7 @@ from pydantic_ai import Agent
 from grafeo_memory.common.schemas import FactsOutput
 from grafeo_memory.common.types import Fact, ModelType
 from grafeo_memory.core._compat import run_sync
-from grafeo_memory.core.prompts import FACT_EXTRACTION_SYSTEM, FACT_EXTRACTION_USER
+from grafeo_memory.core.prompts import FACT_EXTRACTION_SYSTEM, FACT_EXTRACTION_USER, speaker_line
 
 if TYPE_CHECKING:
     from pydantic_ai import AgentRunResult
@@ -31,19 +31,22 @@ def _parse(result: AgentRunResult[FactsOutput]) -> list[Fact]:
 async def extract_facts_async(
     model: ModelType,
     text: str,
-    user_id: str,
+    speaker: str | None = None,
     *,
+    source: str = "chat",
     custom_prompt: str | None = None,
     _on_usage: Callable[[str, RunUsage], None] | None = None,
 ) -> list[Fact]:
     """Extract discrete facts from conversation text via LLM (async).
 
+    ``speaker`` names who is talking (else the prompt says "the user");
+    ``source="notes"`` marks notes or a document with no speaker.
     Returns a list of Fact objects. Returns an empty list if extraction fails
     or no facts are found.
     """
     agent = _make_agent(model, custom_prompt)
     try:
-        result = await agent.run(FACT_EXTRACTION_USER.format(user_id=user_id, text=text))
+        result = await agent.run(FACT_EXTRACTION_USER.format(speaker=speaker_line(speaker, source), text=text))
     except Exception:
         logger.warning("Fact extraction failed", exc_info=True)
         return []
@@ -55,10 +58,13 @@ async def extract_facts_async(
 def extract_facts(
     model: ModelType,
     text: str,
-    user_id: str,
+    speaker: str | None = None,
     *,
+    source: str = "chat",
     custom_prompt: str | None = None,
     _on_usage: Callable[[str, RunUsage], None] | None = None,
 ) -> list[Fact]:
     """Extract discrete facts from conversation text via LLM (sync)."""
-    return run_sync(extract_facts_async(model, text, user_id, custom_prompt=custom_prompt, _on_usage=_on_usage))
+    return run_sync(
+        extract_facts_async(model, text, speaker, source=source, custom_prompt=custom_prompt, _on_usage=_on_usage)
+    )

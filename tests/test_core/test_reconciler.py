@@ -20,7 +20,7 @@ def test_reconcile_with_updates():
         [
             {
                 "decisions": [
-                    {"action": "UPDATE", "target_memory_id": "100", "text": "alice works at beta inc"},
+                    {"action": "UPDATE", "target_memory_id": "m1", "text": "alice works at beta inc"},
                     {"action": "NONE"},
                 ]
             },
@@ -43,7 +43,7 @@ def test_reconcile_with_delete():
         [
             {
                 "decisions": [
-                    {"action": "DELETE", "target_memory_id": "200"},
+                    {"action": "DELETE", "target_memory_id": "m1"},
                     {"action": "ADD", "text": "alice works at beta inc"},
                 ]
             },
@@ -151,7 +151,7 @@ class TestReconciliationBoundary:
             [
                 {
                     "decisions": [
-                        {"action": "UPDATE", "target_memory_id": "42", "text": "alice works from home now"},
+                        {"action": "UPDATE", "target_memory_id": "m1", "text": "alice works from home now"},
                     ]
                 },
             ]
@@ -178,7 +178,7 @@ class TestReconciliationBoundary:
             [
                 {
                     "decisions": [
-                        {"action": "UPDATE", "target_memory_id": "10", "text": "alice works from home"},
+                        {"action": "UPDATE", "target_memory_id": "m1", "text": "alice works from home"},
                         {"action": "ADD", "text": "alice has a cat named whiskers"},
                     ]
                 },
@@ -189,4 +189,79 @@ class TestReconciliationBoundary:
         decisions = reconcile(model, facts, existing)
         assert len(decisions) == 2
         assert decisions[0].action == MemoryAction.UPDATE
+        assert decisions[0].target_memory_id == "10"
         assert decisions[1].action == MemoryAction.ADD
+
+
+def test_targets_are_aliases_not_numbers_from_the_memory_text():
+    """Candidates reach the engine as m1..mN by score; only an alias maps back to a real id."""
+    facts = [Fact("alice lives at 533 elm st")]
+    existing = [
+        {"id": "4", "text": "alice likes tea", "score": 0.3},
+        {"id": "17", "text": "alice lives at 532 elm st", "score": 0.8},
+    ]
+
+    def answer(target):
+        return make_test_model(
+            [{"decisions": [{"action": "UPDATE", "target_memory_id": target, "text": "alice lives at 533 elm st"}]}]
+        )
+
+    by_number = reconcile(answer("532"), facts, existing)
+    assert len(by_number) == 1
+    assert by_number[0].target_memory_id is None
+
+    by_alias = reconcile(answer("m1"), facts, existing)
+    assert len(by_alias) == 1
+    assert by_alias[0].action == MemoryAction.UPDATE
+    assert by_alias[0].target_memory_id == "17"  # m1 is the top-scored candidate
+
+
+class TestMergeDuplicateDecisions:
+    """One add() must not store the same fact twice (grafeo.ai hero recording)."""
+
+    def _d(self, action, text, target=None):
+        from grafeo_memory.common.types import ReconciliationDecision
+
+        return ReconciliationDecision(action=action, text=text, target_memory_id=target)
+
+    def test_update_plus_add_of_same_text_keeps_the_update(self):
+        from grafeo_memory.core.reconciliation import merge_duplicate_decisions
+
+        out = merge_duplicate_decisions(
+            [
+                self._d(MemoryAction.ADD, "Pied Piper moved to Mountain View."),
+                self._d(MemoryAction.UPDATE, "pied piper moved to  mountain view", "7"),
+            ]
+        )
+        assert [d.action for d in out] == [MemoryAction.NONE, MemoryAction.UPDATE]
+        assert out[1].target_memory_id == "7"
+
+    def test_two_identical_updates_keep_one(self):
+        from grafeo_memory.core.reconciliation import merge_duplicate_decisions
+
+        out = merge_duplicate_decisions(
+            [self._d(MemoryAction.UPDATE, "x moved", "7"), self._d(MemoryAction.UPDATE, "x moved", "7")]
+        )
+        assert [d.action for d in out] == [MemoryAction.UPDATE, MemoryAction.NONE]
+
+    def test_same_text_updating_two_memories_supersedes_both(self):
+        from grafeo_memory.core.reconciliation import merge_duplicate_decisions
+
+        out = merge_duplicate_decisions(
+            [self._d(MemoryAction.UPDATE, "x moved", "7"), self._d(MemoryAction.UPDATE, "x moved", "8")]
+        )
+        assert [(d.action, d.target_memory_id) for d in out] == [
+            (MemoryAction.UPDATE, "7"),
+            (MemoryAction.DELETE, "8"),
+        ]
+
+    def test_distinct_texts_and_other_actions_are_untouched(self):
+        from grafeo_memory.core.reconciliation import merge_duplicate_decisions
+
+        given = [
+            self._d(MemoryAction.ADD, "a"),
+            self._d(MemoryAction.ADD, "b"),
+            self._d(MemoryAction.DELETE, "a", "3"),
+            self._d(MemoryAction.NONE, "a"),
+        ]
+        assert merge_duplicate_decisions(given) == given

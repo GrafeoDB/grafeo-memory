@@ -56,6 +56,7 @@ from grafeo_memory.core.history import (
 )
 from grafeo_memory.core.messages import Message, parse_messages
 from grafeo_memory.core.ontology.types import is_violation
+from grafeo_memory.core.prompts import PROMPTS_VERSION, SOURCES
 from grafeo_memory.core.protocol import GrafeoDBProtocol
 from grafeo_memory.core.reconciliation import (
     filter_relation_candidates,
@@ -363,9 +364,13 @@ class _MemoryCore:
         infer: bool = True,
         importance: float = 1.0,
         memory_type: MemoryType | str = MemoryType.SEMANTIC,
+        speaker: str | None = None,
+        source: str = "chat",
         scopes: list[str] | None = None,
         _from_window: bool = False,
     ) -> AddResult:
+        if source not in SOURCES:
+            raise ValueError(f"source must be one of {SOURCES}, got {source!r}")
         on_usage, total = self._make_usage_collector()
         uid = user_id or self._config.user_id
         sid = session_id or self._config.session_id
@@ -439,7 +444,8 @@ class _MemoryCore:
         extraction = await extract_async(
             self._model,
             text,
-            uid,
+            speaker,
+            source=source,
             custom_fact_prompt=custom_prompt,
             memory_type=mtype.value,
             _on_usage=on_usage,
@@ -609,6 +615,8 @@ class _MemoryCore:
         infer: bool = True,
         importance: float = 1.0,
         memory_type: MemoryType | str = MemoryType.SEMANTIC,
+        speaker: str | None = None,
+        source: str = "chat",
     ) -> AddResult:
         """Add multiple messages in batch.
 
@@ -647,6 +655,8 @@ class _MemoryCore:
                 infer=True,
                 importance=importance,
                 memory_type=mtype,
+                speaker=speaker,
+                source=source,
             )
             all_events.extend(result)
             combined_usage.incr(result.usage)
@@ -908,7 +918,7 @@ class _MemoryCore:
             from grafeo_memory.core.extraction.entities import extract_entities_async
 
             try:
-                entities, _ = await extract_entities_async(self._model, [Fact(text=query)], uid, _on_usage=on_usage)
+                entities, _ = await extract_entities_async(self._model, [Fact(text=query)], _on_usage=on_usage)
             except Exception:
                 logger.warning("_search: entity extraction failed for query=%r", query, exc_info=True)
                 entities = []
@@ -2518,11 +2528,16 @@ class _MemoryCore:
                 if isinstance(row, dict):
                     vals = list(row.values())
                     if vals:
-                        return int(vals[0])
+                        found = int(vals[0])
+                        if entity.display_name and not _get_props(self._db.get_node(found)).get("display_name"):
+                            self._db.set_node_property(found, "display_name", entity.display_name)
+                        return found
         except Exception:
             logger.warning("_find_or_create_entity: lookup failed for %r", entity.name, exc_info=True)
 
         entity_props: dict = {"name": entity.name, "entity_type": entity.entity_type, "user_id": user_id}
+        if entity.display_name:
+            entity_props["display_name"] = entity.display_name  # as written; name stays the key
         if self._config.graph_name:
             entity_props["graph_name"] = self._config.graph_name
         node = self._db.create_node([ENTITY_LABEL], entity_props)
@@ -2985,6 +3000,7 @@ class _MemoryCore:
 
                 layers["bucket"] = bucket.stats(self, self._config.user_id)
         return MemoryStats(
+            prompts_version=PROMPTS_VERSION,
             total_memories=total,
             semantic_count=semantic,
             procedural_count=procedural,
@@ -3133,6 +3149,8 @@ class MemoryManager(_MemoryCore):
         infer: bool = True,
         importance: float = 1.0,
         memory_type: MemoryType | str = MemoryType.SEMANTIC,
+        speaker: str | None = None,
+        source: str = "chat",
         scopes: list[str] | None = None,
     ) -> AddResult:
         """Extract facts from text and store them as memories.
@@ -3145,6 +3163,8 @@ class MemoryManager(_MemoryCore):
             infer: If False, store text directly without LLM extraction/reconciliation.
             importance: Base importance score (0.0-1.0) when enable_importance is True.
             memory_type: Type of memory, "semantic" (facts) or "procedural" (instructions/preferences).
+            speaker: Who is talking, named in the facts (default: message names, else "the user").
+            source: "chat" (default) or "notes" for notes and documents, which have no speaker.
         """
         return run_sync(
             self._add(
@@ -3155,6 +3175,8 @@ class MemoryManager(_MemoryCore):
                 infer=infer,
                 importance=importance,
                 memory_type=memory_type,
+                speaker=speaker,
+                source=source,
                 scopes=scopes,
             )
         )
@@ -3169,6 +3191,8 @@ class MemoryManager(_MemoryCore):
         infer: bool = True,
         importance: float = 1.0,
         memory_type: MemoryType | str = MemoryType.SEMANTIC,
+        speaker: str | None = None,
+        source: str = "chat",
     ) -> AddResult:
         """Add multiple messages in batch.
 
@@ -3184,6 +3208,8 @@ class MemoryManager(_MemoryCore):
                 infer=infer,
                 importance=importance,
                 memory_type=memory_type,
+                speaker=speaker,
+                source=source,
             )
         )
 
@@ -3539,6 +3565,8 @@ class AsyncMemoryManager(_MemoryCore):
         infer: bool = True,
         importance: float = 1.0,
         memory_type: MemoryType | str = MemoryType.SEMANTIC,
+        speaker: str | None = None,
+        source: str = "chat",
         scopes: list[str] | None = None,
     ) -> AddResult:
         """Extract facts from text and store them as memories."""
@@ -3550,6 +3578,8 @@ class AsyncMemoryManager(_MemoryCore):
             infer=infer,
             importance=importance,
             memory_type=memory_type,
+            speaker=speaker,
+            source=source,
             scopes=scopes,
         )
 
@@ -3563,6 +3593,8 @@ class AsyncMemoryManager(_MemoryCore):
         infer: bool = True,
         importance: float = 1.0,
         memory_type: MemoryType | str = MemoryType.SEMANTIC,
+        speaker: str | None = None,
+        source: str = "chat",
     ) -> AddResult:
         """Add multiple messages in batch."""
         return await self._add_batch(
@@ -3573,6 +3605,8 @@ class AsyncMemoryManager(_MemoryCore):
             infer=infer,
             importance=importance,
             memory_type=memory_type,
+            speaker=speaker,
+            source=source,
         )
 
     @overload

@@ -1857,7 +1857,7 @@ class TestDeleteReconciliation:
                 },
                 {
                     "decisions": [
-                        {"action": "delete", "text": "", "target_memory_id": mid},
+                        {"action": "delete", "text": "", "target_memory_id": "m1"},  # mid, the only candidate
                     ]
                 },
             ],

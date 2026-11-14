@@ -70,7 +70,7 @@ def graph_search(
         entities = _entities
     else:
         try:
-            entities, _ = extract_entities(model, [Fact(text=query)], user_id, _on_usage=_on_usage)
+            entities, _ = extract_entities(model, [Fact(text=query)], _on_usage=_on_usage)
         except Exception:
             logger.warning("graph_search: entity extraction failed for query=%r", query, exc_info=True)
             return []

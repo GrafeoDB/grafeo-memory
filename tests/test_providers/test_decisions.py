@@ -123,7 +123,8 @@ def test_decision_engine_per_fact_add():
     assert len(fake.calls) == 1
     state, questions = fake.calls[0]
     assert len(questions) == len(FACTS)  # per-fact pack: one question per fact
-    assert "alice works at beta inc" in state and "100" in state
+    assert "alice works at beta inc" in state and "m1" in state  # candidate shown by alias
+    assert "100" not in state  # the real id never reaches the engine
     assert all(d.action == MemoryAction.ADD for d in decisions)
     assert all(d.engine == "decision" and d.confidence == 1.0 for d in decisions)
 
@@ -134,9 +135,9 @@ def test_decision_engine_targets_update_delete():
         for q in questions:
             assert isinstance(q, CategoricalQuestion)
             if q.question_id == "fact_0":
-                out.append(Decision(q.question_id, "UPDATE_100", 0.9, 0.95, runner_up=0.1))
+                out.append(Decision(q.question_id, "UPDATE_m1", 0.9, 0.95, runner_up=0.1))
             else:
-                out.append(Decision(q.question_id, "DELETE_100", 0.8, 0.9, runner_up=0.2))
+                out.append(Decision(q.question_id, "DELETE_m1", 0.8, 0.9, runner_up=0.2))
         return out
 
     fake = FakeDecisionModel(handler)
@@ -159,7 +160,7 @@ def test_decision_engine_pairwise_granularity():
         out = []
         for q in questions:
             # one question per (fact, candidate)
-            if q.question_id == "fact_0|mem_100":
+            if q.question_id == "fact_0|mem_m1":
                 out.append(Decision(q.question_id, "INVALIDATE", 0.9, 0.9, runner_up=0.1))
             else:
                 out.append(Decision(q.question_id, "UNRELATED", 0.95, 0.95, runner_up=0.05))

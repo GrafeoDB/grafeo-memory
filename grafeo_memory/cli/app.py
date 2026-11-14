@@ -35,6 +35,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_add.add_argument("text", help="Text to add (use '-' for stdin)")
     p_add.add_argument("--type", "-t", dest="memory_type", default="semantic", choices=["semantic", "procedural"])
     p_add.add_argument("--no-infer", action="store_true", help="Store raw without LLM extraction")
+    p_add.add_argument("--speaker", help="Who said the text (default: the user)")
+    p_add.add_argument(
+        "--source",
+        choices=["chat", "notes"],
+        default="chat",
+        help="'notes' for notes and documents, which have no speaker",
+    )
 
     # search
     p_search = sub.add_parser("search", help="Search memories")
@@ -198,7 +205,9 @@ def _cmd_add(manager, args: argparse.Namespace) -> None:
         print("Error: no text provided.", file=sys.stderr)
         sys.exit(1)
 
-    events = manager.add(text, memory_type=args.memory_type, infer=not args.no_infer)
+    events = manager.add(
+        text, memory_type=args.memory_type, infer=not args.no_infer, speaker=args.speaker, source=args.source
+    )
     _print_events(list(events), json_mode=args.output_json)
 
 

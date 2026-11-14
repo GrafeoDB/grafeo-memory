@@ -76,7 +76,8 @@ class TestDeleteThroughEachEdgeType:
         second = _make_manager(
             [
                 {"facts": ["alice works at globex"], "entities": [ALICE], "relations": []},
-                {"decisions": [{"action": "update", "text": "alice works at globex", "target_memory_id": old_id}]},
+                # old_id is the only candidate, shown to the model as "m1"
+                {"decisions": [{"action": "update", "text": "alice works at globex", "target_memory_id": "m1"}]},
             ],
             db=db,
             reconciliation_threshold=0.0,

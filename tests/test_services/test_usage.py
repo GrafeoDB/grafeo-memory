@@ -150,7 +150,7 @@ class TestUsageOnAdd:
 
         model = make_test_model(
             [
-                {"decisions": [{"action": "NONE", "text": "alice works at acme", "target_memory_id": "1"}]},
+                {"decisions": [{"action": "NONE", "text": "alice works at acme", "target_memory_id": "m1"}]},
             ]
         )
         calls: list[tuple[str, RunUsage]] = []

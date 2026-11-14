@@ -127,7 +127,7 @@ class TestBiTemporalAdd:
         march_1 = int(datetime(2024, 3, 1, tzinfo=UTC).timestamp() * 1000)
 
         # We need a two-phase setup: first add creates the memory, then we
-        # build a second manager whose reconciliation mock references the real ID.
+        # build a second manager whose reconciliation mock updates it.
         import grafeo
 
         db = grafeo.GrafeoDB()
@@ -146,7 +146,8 @@ class TestBiTemporalAdd:
         old_memory_id = events1[0].memory_id
         manager1.close()
 
-        # Second add targets the real memory ID so UPDATE path executes.
+        # Second add targets the only candidate, shown to the model as alias "m1",
+        # so the UPDATE path executes against the real memory.
         # reconciliation_threshold=0.0 ensures search_similar finds the first memory,
         # so the reconciliation LLM mock is used instead of the fast-path ADD.
         manager2 = _make_manager(
@@ -155,7 +156,7 @@ class TestBiTemporalAdd:
                 _temporal_annotation_output([{"fact_index": 0, "valid_at": "2024-03-01", "invalid_at": None}]),
                 {
                     "decisions": [
-                        {"action": "update", "text": "alice now works at globex", "target_memory_id": old_memory_id},
+                        {"action": "update", "text": "alice now works at globex", "target_memory_id": "m1"},
                     ]
                 },
             ],

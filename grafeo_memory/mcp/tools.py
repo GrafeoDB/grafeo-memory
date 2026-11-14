@@ -30,6 +30,9 @@ async def memory_add(
     user_id: str | None = None,
     memory_type: str = "semantic",
     infer: bool = True,
+    session_id: str | None = None,
+    speaker: str | None = None,
+    source: str = "notes",
     ctx: Context[AppContext, ServerSession] | None = None,
 ) -> str:
     """Add a memory by extracting facts from text via LLM.
@@ -41,10 +44,14 @@ async def memory_add(
     (use memory_type="procedural").
 
     Args:
-        text: The text to extract memories from (e.g. "I work at Acme Corp").
+        text: The text to extract memories from (e.g. "Alice works at Acme Corp").
         user_id: User to store the memory for. Uses server default if omitted.
         memory_type: "semantic" (facts), "procedural" (instructions), or "episodic" (interactions).
         infer: True (default) to use LLM extraction, False to store text as-is.
+        speaker: Who said the text, when it is something a person said (e.g. "Alice").
+        source: "notes" (default: an agent's notes, no speaker) or "chat" for a conversation.
+        session_id: The session the text belongs to (memory_session_start); an anonymous
+            session only buffers it.
 
     Returns:
         JSON with events list (each with action, memory_id, text).
@@ -69,6 +76,8 @@ async def memory_add_batch(
     user_id: str | None = None,
     memory_type: str = "semantic",
     infer: bool = True,
+    speaker: str | None = None,
+    source: str = "notes",
     ctx: Context[AppContext, ServerSession] | None = None,
 ) -> str:
     """Add multiple memories in a single batch operation.
@@ -81,6 +90,8 @@ async def memory_add_batch(
         user_id: User to store the memories for. Uses server default if omitted.
         memory_type: "semantic" (facts), "procedural" (instructions), or "episodic" (interactions).
         infer: True (default) to use LLM extraction, False to store as-is.
+        speaker: Who said the texts, when they are something a person said.
+        source: "notes" (default) or "chat".
 
     Returns:
         JSON with events list for all memories added.

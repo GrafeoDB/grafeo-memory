@@ -763,10 +763,14 @@ class Fact:
 
 @dataclass
 class Entity:
-    """An entity extracted from conversation text."""
+    """An entity extracted from conversation text.
+
+    ``name`` is the stored key ("acme_corp"); ``display_name`` the name as written ("Acme Corp").
+    """
 
     name: str
     entity_type: str
+    display_name: str | None = None
 
 
 @dataclass
@@ -841,6 +845,8 @@ class MemoryStats:
     # Layer metrics: open decisions by status/kind, resolution rungs (deterministic share),
     # certified/provisional counts. Empty when no layer is on.
     layers: dict = field(default_factory=dict)
+    # Version of the extraction and reconciliation prompts (core.prompts.PROMPTS_VERSION)
+    prompts_version: int = 0
 
 
 @dataclass
