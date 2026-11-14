@@ -1,9 +1,12 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/GrafeoDB/grafeo-memory/main/.github/readme/header-dark.svg">
+  <img alt="grafeo-memory: Memory for agents, in one file: a graph with vectors and history, with any LLM." src="https://raw.githubusercontent.com/GrafeoDB/grafeo-memory/main/.github/readme/header-light.svg" width="100%">
+</picture>
+
 [![CI](https://github.com/GrafeoDB/grafeo-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/GrafeoDB/grafeo-memory/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/GrafeoDB/grafeo-memory/graph/badge.svg)](https://codecov.io/gh/GrafeoDB/grafeo-memory)
 [![PyPI](https://img.shields.io/pypi/v/grafeo-memory.svg)](https://pypi.org/project/grafeo-memory/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENCE)
-
-# grafeo-memory
 
 AI memory layer powered by [GrafeoDB](https://github.com/GrafeoDB/grafeo), an embedded graph database with native vector search.
 
