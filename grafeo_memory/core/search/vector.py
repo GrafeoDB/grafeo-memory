@@ -331,15 +331,20 @@ def search_similar(
     if filters:
         search_filters.update(filters)
 
+    per_embedding = 10
     for emb in embeddings:
         try:
-            hits = db.vector_search(MEMORY_LABEL, vector_property, emb, 10, filters=search_filters)
+            # superseded (expired) memories are skipped below, so ask for spare hits
+            hits = db.vector_search(MEMORY_LABEL, vector_property, emb, per_embedding * 3, filters=search_filters)
         except Exception:
             logger.warning("search_similar: vector_search failed for embedding", exc_info=True)
             continue
 
         logger.debug("search_similar: got %d hits for embedding", len(hits))
+        kept = 0
         for node_id, distance in hits:
+            if kept >= per_embedding:
+                break
             if node_id in seen:
                 continue
             similarity = max(0.0, 1.0 - float(distance))
@@ -351,6 +356,9 @@ def search_similar(
             if node is None:
                 continue
             props = _get_props(node)
+            if props.get("expired_at") is not None:
+                continue  # superseded or deleted: never a reconciliation candidate
+            kept += 1
             results.append(
                 {
                     "id": str(node_id),

@@ -1327,6 +1327,7 @@ class _MemoryCore:
         bucket_on = self._config.bucket_on
         closing = self._config.ontology.interval_closing
         slots = _fact_slots(decisions, [f.text for f in extraction.facts])
+        consumed_targets: set[str] = set()
 
         def fact_embedding(i: int, text: str) -> list[float] | None:
             j = slots[i]
@@ -1354,7 +1355,22 @@ class _MemoryCore:
                 )
                 decision = replace(decision, target_memory_id=None)
 
-            if decision.parked and bucket_on and decision.action != MemoryAction.ADD:
+            # One add() can carry several decisions for the same memory ("I left Acme and joined
+            # Beta" -> two UPDATE decisions for "works at Acme"). The first supersedes it; a later UPDATE of
+            # the now-expired memory becomes an ADD, and a later DELETE has nothing left to do.
+            # A parked decision supersedes nothing, so it consumes no target.
+            parks = decision.parked and bucket_on and decision.action != MemoryAction.ADD
+            if (
+                not parks
+                and decision.target_memory_id
+                and decision.action in (MemoryAction.UPDATE, MemoryAction.DELETE)
+            ):
+                if str(decision.target_memory_id) in consumed_targets:
+                    decision = replace(decision, target_memory_id=None)
+                else:
+                    consumed_targets.add(str(decision.target_memory_id))
+
+            if parks:
                 events.append(
                     self._park_fact(
                         decision,

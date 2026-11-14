@@ -116,3 +116,88 @@ class TestLegacyMemoryTypeInSearch:
             texts = {h.text for h in hits}
             assert texts == {"alice likes green tea", "bob likes black tea"}, search.__name__
         manager.close()
+
+
+def _facts(*facts: str) -> dict:
+    return {"facts": list(facts), "entities": [], "relations": []}
+
+
+class TestSupersededMemoriesStayOut:
+    """Dogfooding 0.3.0: an UPDATE expired the old memory, and the next add() offered that expired
+    memory as a candidate again, so the reconciler "updated" it a second time and the live memory
+    stayed next to the newer fact."""
+
+    def test_expired_memory_is_no_reconciliation_candidate(self):
+        from grafeo_memory.core.search.vector import search_similar
+
+        manager = _make_manager(
+            [_facts("alice works at acme"), {"decisions": [{"action": "add", "text": "alice works at acme"}]}]
+        )
+        mid = manager.add("Alice works at Acme")[0].memory_id
+        emb = manager._embedder.embed(["alice works at acme"])
+        assert [c["id"] for c in search_similar(manager._db, emb, user_id="test_user", threshold=0.0)] == [mid]
+        manager._expire_memory(mid, 1)
+        assert search_similar(manager._db, emb, user_id="test_user", threshold=0.0) == []
+        manager.close()
+
+    def test_update_of_a_superseded_memory_becomes_add(self):
+        db = grafeo.GrafeoDB()
+        first = _make_manager(
+            [_facts("alice works at acme"), {"decisions": [{"action": "add", "text": "alice works at acme"}]}], db=db
+        )
+        old = first.add("Alice works at Acme")[0].memory_id
+        second = _make_manager(
+            [
+                _facts("alice is a senior engineer at acme"),
+                {
+                    "decisions": [
+                        # old is the only candidate, shown to the model as "m1"
+                        {"action": "update", "text": "alice is a senior engineer at acme", "target_memory_id": "m1"}
+                    ]
+                },
+            ],
+            db=db,
+            reconciliation_threshold=0.0,
+        )
+        promoted = second.add("Alice was promoted")
+        assert [e.action for e in promoted] == [MemoryAction.UPDATE], "the setup supersedes old"
+        live = promoted[0].memory_id
+        third = _make_manager(
+            [
+                _facts("alice works at beta"),
+                # old is expired, so it has no alias; its real id is not a valid target
+                {"decisions": [{"action": "update", "text": "alice works at beta", "target_memory_id": old}]},
+            ],
+            db=db,
+            reconciliation_threshold=0.0,
+        )
+        events = third.add("Alice joined Beta")
+        assert [e.action for e in events] == [MemoryAction.ADD], "the expired memory is not a valid target"
+        assert {m.memory_id for m in third.get_all()} >= {live}
+        first.close()
+
+    def test_two_updates_of_one_memory_in_one_add(self):
+        db = grafeo.GrafeoDB()
+        first = _make_manager(
+            [_facts("alice works at acme"), {"decisions": [{"action": "add", "text": "alice works at acme"}]}], db=db
+        )
+        old = first.add("Alice works at Acme")[0].memory_id
+        second = _make_manager(
+            [
+                _facts("alice left acme", "alice joined beta"),
+                {
+                    "decisions": [
+                        # old is the only candidate, shown to the model as "m1"
+                        {"action": "update", "text": "alice left acme", "target_memory_id": "m1"},
+                        {"action": "update", "text": "alice joined beta", "target_memory_id": "m1"},
+                    ]
+                },
+            ],
+            db=db,
+            reconciliation_threshold=0.0,
+        )
+        events = second.add("I left Acme and joined Beta")
+        assert [e.action for e in events] == [MemoryAction.UPDATE, MemoryAction.ADD]
+        assert old not in {m.memory_id for m in second.get_all()}  # superseded once, by the first update
+        assert sorted(m.text for m in second.get_all()) == ["alice joined beta", "alice left acme"]
+        first.close()
