@@ -1,4 +1,6 @@
 <picture>
+  <source media="(max-width: 556px) and (prefers-color-scheme: dark), (min-width: 768px) and (max-width: 844px) and (prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/GrafeoDB/grafeo-memory/main/.github/readme/header-narrow-dark.svg">
+  <source media="(max-width: 556px), (min-width: 768px) and (max-width: 844px)" srcset="https://raw.githubusercontent.com/GrafeoDB/grafeo-memory/main/.github/readme/header-narrow-light.svg">
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/GrafeoDB/grafeo-memory/main/.github/readme/header-dark.svg">
   <img alt="grafeo-memory: Memory for agents, in one file: a graph with vectors and history, with any LLM." src="https://raw.githubusercontent.com/GrafeoDB/grafeo-memory/main/.github/readme/header-light.svg" width="100%">
 </picture>
