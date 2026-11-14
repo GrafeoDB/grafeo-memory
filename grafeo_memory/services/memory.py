@@ -57,7 +57,12 @@ from grafeo_memory.core.history import (
 from grafeo_memory.core.messages import Message, parse_messages
 from grafeo_memory.core.ontology.types import is_violation
 from grafeo_memory.core.protocol import GrafeoDBProtocol
-from grafeo_memory.core.reconciliation import filter_relation_candidates, reconcile_async, reconcile_relations_async
+from grafeo_memory.core.reconciliation import (
+    filter_relation_candidates,
+    merge_duplicate_decisions,
+    reconcile_async,
+    reconcile_relations_async,
+)
 from grafeo_memory.core.search import graph_search, hybrid_search, search_similar
 from grafeo_memory.core.search.vector import _get_props, _parse_metadata
 from grafeo_memory.providers.decision.protocol import DecisionModel
@@ -500,6 +505,7 @@ class _MemoryCore:
                 park_floor=cfg.bucket.floor if bucket_on else None,
                 park_actions=tuple(cfg.bucket.park_actions),
             )
+            decisions = merge_duplicate_decisions(decisions)
             if cfg.policy_on:
                 from grafeo_memory.services import policy
 
@@ -835,6 +841,9 @@ class _MemoryCore:
         if temporal_hints.include_expired and not include_expired:
             include_expired = True
         effective_k = k * 2 if temporal_hints.expand_limit else k
+        # A point-in-time query asks about facts that may have ended since, so it reaches
+        # superseded memories too; _valid_at_point keeps only the ones valid at that moment.
+        keep_expired = include_expired or point_in_time is not None
 
         # Embed query once, share across both search paths
         query_embedding = _as_vector(self._embedder.embed([query])[0])
@@ -858,6 +867,7 @@ class _MemoryCore:
                 vector_property=self._config.vector_property,
                 query_embedding=query_embedding,
                 lambda_mult=self._config.mmr_lambda,
+                include_expired=keep_expired,
             )
         else:
             vector_results = hybrid_search(
@@ -871,6 +881,7 @@ class _MemoryCore:
                 text_property=self._config.text_property,
                 rrf_k=self._config.hybrid_rrf_k,
                 query_embedding=query_embedding,
+                include_expired=keep_expired,
             )
 
         if _trace is not None:
@@ -923,6 +934,7 @@ class _MemoryCore:
             query_embedding=query_embedding,
             search_depth=self._config.graph_search_depth,
             graph_name=self._config.graph_name,
+            include_expired=keep_expired,
         )
 
         # Post-hoc filter graph results by memory_type if specified
@@ -978,7 +990,7 @@ class _MemoryCore:
             )
 
         # Temporal filtering: exclude expired and apply time range
-        if not include_expired:
+        if not keep_expired:
             final = [r for r in final if r.expired_at is None]
         if time_after is not None:
             final = [r for r in final if r.created_at is not None and r.created_at >= time_after]
@@ -1019,11 +1031,13 @@ class _MemoryCore:
                 final,
                 [e.name for e in entities],
                 query_embedding,
-                include_expired,
+                keep_expired,
                 subjects,
                 scopes,
                 _trace,
             )
+            if point_in_time is not None:  # memories the layer pass pulled in meet the same moment
+                final = [r for r in final if _valid_at_point(r, point_in_time)]
 
         # Topology boost: lightweight structural re-ranking (no LLM call)
         if self._config.enable_topology_boost:
@@ -1754,6 +1768,12 @@ class _MemoryCore:
         self._db.set_node_property(node_id, "expired_at", timestamp)
         if (self._config.bitemporal_on or self._config.ontology.interval_closing) and invalid_at is not None:
             self._db.set_node_property(node_id, "invalid_at", invalid_at)
+            valid_at = props.get("valid_at")
+            if valid_at is not None and int(valid_at) > invalid_at:
+                # The new fact starts before this one's recorded start (often an undated fact
+                # stamped with the day it was learned): the start is unknown, not inverted.
+                with contextlib.suppress(Exception):
+                    self._db.remove_node_property(node_id, "valid_at")
         return old_text
 
     def _inherit_entity_edges(self, old_memory_id: str, new_memory_id: str) -> None:
@@ -3055,13 +3075,16 @@ def _as_vector(embedding: Iterable[float]) -> list[float]:
 def _valid_at_point(result: SearchResult, pit: int) -> bool:
     """Check whether a memory was valid at a given point in time.
 
-    Permissive: memories with no valid_at are always included (backward compat).
+    Permissive: a current memory with no valid_at is always included (backward compat).
+    An expired memory counts only when it records when it stopped being true
+    (``invalid_at``): one retracted by DELETE, or superseded without a stated end, was
+    never shown to be valid at any given point.
     """
-    if result.valid_at is None:
-        return True
-    if result.valid_at > pit:
+    if result.expired_at is not None and result.invalid_at is None:
         return False
-    return result.invalid_at is None or result.invalid_at > pit
+    if result.invalid_at is not None and result.invalid_at <= pit:
+        return False
+    return result.valid_at is None or result.valid_at <= pit
 
 
 def _extract_actor(parsed: list[Message]) -> tuple[str | None, str | None]:

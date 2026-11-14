@@ -75,6 +75,44 @@ def _parse(result: AgentRunResult[ReconciliationOutput]) -> list[ReconciliationD
     return decisions
 
 
+def _text_key(text: str) -> str:
+    return " ".join(text.casefold().split()).rstrip(".!")
+
+
+def merge_duplicate_decisions(decisions: list[ReconciliationDecision]) -> list[ReconciliationDecision]:
+    """Merge ADD and UPDATE decisions of one call that would store the same text.
+
+    An engine can answer one fact twice (an UPDATE plus an ADD of the same text, or two
+    identical UPDATE decisions), which stored the fact twice. Per text, the first UPDATE wins (else
+    the first ADD); a repeat with the same or no target becomes NONE, and an UPDATE of a
+    different memory becomes a DELETE of it, so that memory is superseded too. The list
+    keeps its length and order, because the executor matches decisions to facts by position.
+    """
+    from dataclasses import replace
+
+    winner: dict[str, int] = {}
+    for i, d in enumerate(decisions):
+        if d.action not in (MemoryAction.ADD, MemoryAction.UPDATE):
+            continue
+        key = _text_key(d.text)
+        j = winner.get(key)
+        if j is None or (decisions[j].action == MemoryAction.ADD and d.action == MemoryAction.UPDATE):
+            winner[key] = i
+    out = list(decisions)
+    for i, d in enumerate(decisions):
+        if d.action not in (MemoryAction.ADD, MemoryAction.UPDATE):
+            continue
+        j = winner[_text_key(d.text)]
+        if i == j:
+            continue
+        w = decisions[j]
+        if d.action == MemoryAction.UPDATE and d.target_memory_id and d.target_memory_id != w.target_memory_id:
+            out[i] = replace(d, action=MemoryAction.DELETE)
+        else:
+            out[i] = replace(d, action=MemoryAction.NONE, target_memory_id=None)
+    return out
+
+
 def _fast_path_add(new_facts: list[Fact]) -> list[ReconciliationDecision]:
     return [ReconciliationDecision(action=MemoryAction.ADD, text=f.text, engine="fast") for f in new_facts]
 
