@@ -2,7 +2,7 @@
 
 All notable changes to grafeo-memory, an embedded AI memory layer on GrafeoDB.
 
-## [0.4.0] - Unreleased
+## [0.4.0] - 2026-11-14
 
 Identity and tenancy release: the user_id never reaches a prompt, `for_user()` scopes a manager to one user, and sessions can be anonymous. Before upgrading: Python 3.13 is the minimum, extraction results change (0.3.0 benchmark runs are not comparable), search makes no model call by default (`query_entities="llm"` restores it), and graph metrics are computed by `compile()`.
 
