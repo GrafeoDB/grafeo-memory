@@ -169,6 +169,12 @@ class TestIdentityInPrompts:
         assert '"the user"' in seen[0]
         assert "user_id" not in seen[0]
 
+    def test_labelled_turns_keep_their_speaker_names(self):
+        # LOCOMO turns read "Caroline (user): ..."; facts must say Caroline, not "the user".
+        seen: list[str] = []
+        extract(_capturing_model(self.OUT, seen), "Caroline (user): I went to a support group")
+        assert "Name a speaker by the name on their line" in seen[0]
+
     def test_named_speaker(self):
         seen: list[str] = []
         extract(_capturing_model(self.OUT, seen), "I like hiking", "Caroline")

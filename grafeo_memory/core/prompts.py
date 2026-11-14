@@ -4,7 +4,7 @@ from __future__ import annotations
 
 # Bump on any prompt change that can change extraction or reconciliation results;
 # stats() reports it and benchmark runs record it, so runs on different prompts are never compared.
-PROMPTS_VERSION = 2
+PROMPTS_VERSION = 3
 
 SOURCES = ("chat", "notes")
 
@@ -19,8 +19,9 @@ def speaker_line(speaker: str | None = None, source: str = "chat") -> str:
     if speaker:
         return f'The speaker is {speaker}: write facts about them as "{speaker}", never as "I".'
     return (
-        "In a conversation each line starts with its speaker's name or role; text without labels "
-        'is the user speaking. Write facts about the user as "the user", never as "I".'
+        "In a conversation each line starts with its speaker. Name a speaker by the name on their "
+        'line ("Alice (user): ..." is Alice). Only text without labels, or a line labelled just "user", '
+        'is the user: write facts about them as "the user". Never write "I".'
     )
 
 

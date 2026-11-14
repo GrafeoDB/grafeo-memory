@@ -491,7 +491,7 @@ file named by `GRAFEO_MEMORY_ENV_FILE`; a variable that is already set wins, and
 | `GRAFEO_MEMORY_USER` | `default` | Default user ID |
 | `GRAFEO_MEMORY_ENV_FILE` | *(none)* | A `.env` file to read keys and settings from |
 | `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `GOOGLE_API_KEY` | *(none)* | Provider keys, never logged |
-| `GRAFEO_MEMORY_QUERY_ENTITIES` | `llm` | `lexical`: search makes no model call |
+| `GRAFEO_MEMORY_QUERY_ENTITIES` | `lexical` | `llm`: search asks the model for the entities a query names (one call per search) |
 | `GRAFEO_MEMORY_CACHE_ENABLED` | `false` | Cache LLM, embedding and decision calls |
 | `GRAFEO_MEMORY_CACHE_MAX_ENTRIES`, `GRAFEO_MEMORY_CACHE_MAX_MEMORY_MB`, `GRAFEO_MEMORY_CACHE_MAX_STORAGE_MB` | `10000`, `128`, `512` | Cache limits |
 | `GRAFEO_MEMORY_CACHE_PERSIST_PATH` | *(next to the database)* | Cache file |

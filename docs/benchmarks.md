@@ -46,6 +46,21 @@ toggles `--temporal-precheck`, `--ontology`, `--bitemporal`, `--compile`, `--tax
 Results aggregate into `<bench_home>/locomo_runs/matrix_round<N>_results.json`;
 `--report` re-aggregates without rerunning.
 
+## 0.4.0 against 0.3.0
+
+Same setup as below: LOCOMO conversations 0 to 2 (385 questions, categories 1 to 4), Mistral Small 4 for
+extraction, answers and judge, `k=100`. Runs record `prompts_version` in `args.json`; 0.4.0 is version 3.
+
+| Version | Judge score | Evidence recall |
+| --- | --- | --- |
+| 0.3.0, default pipeline | 0.9013 | 0.995 |
+| 0.4.0, default pipeline (`query_entities="lexical"`) | 0.9091 | 0.994 |
+| 0.4.0, `query_entities="llm"` | 0.9091 | 0.994 |
+
+Both 0.4.0 rows answer from the same ingested databases, so they differ only in how search finds query entities.
+A second ingest with one more speaker instruction scored 0.8805 (llm) and 0.8883 (lexical): the gap between two
+ingests is about the noise band, and lexical never scored below llm on the same databases.
+
 ## 0.3.0 against 0.2.2
 
 LOCOMO conversations 0 to 2 (385 questions, categories 1 to 4), Mistral Small 4 for extraction, answers and judge,

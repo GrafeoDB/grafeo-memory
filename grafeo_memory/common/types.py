@@ -206,9 +206,9 @@ class RetrievalConfig:
     # boosted and filled in by vector similarity within that set.
     order: str = "vector"
     # How search() finds the entities a query names, for graph search and deterministic order:
-    # "llm" asks the model (one call per search); "lexical" matches whole-word entity names and
-    # merged aliases already in the store, with no model call.
-    query_entities: str = "llm"
+    # "lexical" (default) matches whole-word entity names and merged aliases already in the
+    # store, with no model call; "llm" asks the model (one call per search).
+    query_entities: str = "lexical"
     expansion_depth: int = 1  # relation hops from the mentioned entities (0 = only them)
     deterministic_boost: float = 0.2  # score multiplier bonus for memories in the deterministic set
     deterministic_cap: int = 200  # max memories pulled from the deterministic set

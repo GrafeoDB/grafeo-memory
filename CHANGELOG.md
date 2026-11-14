@@ -4,20 +4,21 @@ All notable changes to grafeo-memory, an embedded AI memory layer on GrafeoDB.
 
 ## [0.4.0] - Unreleased
 
-Maintenance release: Python 3.13 is the minimum, and the LLM call cache keeps its newest entries when it reloads on Windows.
+Identity and tenancy release: the user_id never reaches a prompt, `for_user()` scopes a manager to one user, and sessions can be anonymous. Before upgrading: Python 3.13 is the minimum, extraction results change (0.3.0 benchmark runs are not comparable), search makes no model call by default (`query_entities="llm"` restores it), and graph metrics are computed by `compile()`.
 
 ### Added
 
-- **Search without a model call**: `RetrievalConfig.query_entities="lexical"` (`GRAFEO_MEMORY_QUERY_ENTITIES=lexical`) finds the entities a query names by whole-word match on entity names and merged aliases already in the store. A CLI search drops from 4.2 s to 2.0 s with the same top 3; on LOCOMO conversations 0 to 2 the score stays within noise and LLM calls per run fall from 701 to 204.
 - **Speaker and source on `add()`**: `add(speaker="Alice")` names who is talking, and `add(source="notes")` marks notes or a document, which have no speaker. Also on `add_batch()`, in the CLI (`--speaker`, `--source`) and on the MCP `memory_add` and `memory_add_batch` tools, where `source` defaults to `"notes"` because agent writes are notes.
 - **`for_user(user_id)`**: a view of a `MemoryManager` or `AsyncMemoryManager` that acts for one user, refuses calls naming another, and reaches only that user's memories, history and open decisions by id (`update`, `delete`, `set_importance`, `certify`, `history`, `resolve_open_decision`). Views share the database and caches, and closing one leaves the database open; the unbound manager behaves as in 0.3.0, and subject roots are edited on it only.
 - **Sessions**: `start_session(session_id=None, *, anonymous=False)` returns a session id for `add(session_id=...)`, `assemble()` and `end_session()`. An anonymous session keeps its turns in memory only, never writes long-term memory, is discarded by `end_session()` and expires after `tiers.working.session_ttl` (default 3600 s); `for_user(user_id).start_session(sid)` binds it to that user, one way, and stores its turns. MCP tools `memory_session_start` and `memory_session_end`; `memory_add` takes `session_id`.
 - **The CLI and MCP server act through `for_user()`**: a tool call or command by id reaches the memories of its `user_id` (default: `GRAFEO_MEMORY_USER`) only. `memory_update`, `memory_delete`, `memory_history` and `memory_resolve_decision` take an optional `user_id`.
-- **Prompt version**: `stats().prompts_version` reports `PROMPTS_VERSION` (now 2), and the benchmark harnesses record it in each run's `args.json`.
+- **Prompt version**: `stats().prompts_version` reports `PROMPTS_VERSION` (now 3), and the benchmark harnesses record it in each run's `args.json`.
 
 ### Changed
 
-Extraction results change; scores from 0.3.0 runs are not comparable with 0.4.0 runs.
+Extraction results change; scores from 0.3.0 runs are not comparable with 0.4.0 runs. On LOCOMO conversations 0 to 2 the 0.4.0 default pipeline scores 0.9091 (0.3.0: 0.9013, `docs/benchmarks.md`).
+
+- **Search makes no model call by default**: `RetrievalConfig.query_entities` defaults to `"lexical"` (`GRAFEO_MEMORY_QUERY_ENTITIES`), which finds the entities a query names by whole-word match on entity names and merged aliases already in the store; `"llm"` asks the model as 0.3.0 did. A CLI search drops from 4.2 s to 2.0 s, and on LOCOMO conversations 0 to 2 both settings score 0.9091.
 
 - **The user_id never enters a prompt**: extraction used it as the speaker's name, so facts read "the user grafeo ..." and the id went to the model provider and, with a decision model, to TypeSafe. Facts now name the speaker from `speaker=` or the message `name`, and otherwise "the user".
 - **Entity names read as written**: the model returns names as they appear ("Acme Corp"); grafeo-memory stores the key (`acme_corp`) as the entity's `name`, so existing stores keep matching, and the written form as `display_name`. Facts no longer carry snake_case names.
