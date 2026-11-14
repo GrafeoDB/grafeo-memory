@@ -111,9 +111,9 @@ grafeo-memory implements the **reconciliation loop**, the intelligence layer tha
 - [docs/architecture.md](docs/architecture.md): the package layers and the import rules between them
 - [docs/benchmarks.md](docs/benchmarks.md): LOCOMO, LongMemEval and BEAM harnesses, matrix rounds, test gates
 
-Since 0.3.0 the modules live in layers (`grafeo_memory.common`, `.providers`, `.core`, `.services`).
-`from grafeo_memory import ...` is unchanged. Pre-0.3 module paths such as `grafeo_memory.manager` or
-`grafeo_memory.search.vector` still import, with a `DeprecationWarning` naming the new path; they are removed in 0.7.
+The modules live in layers (`grafeo_memory.common`, `.providers`, `.core`, `.services`); import the public API
+with `from grafeo_memory import ...`. Older module paths such as `grafeo_memory.manager` or
+`grafeo_memory.search.vector` still import, with a `DeprecationWarning` naming the new path, until 0.7.
 
 ## Multi-User Isolation
 
@@ -179,7 +179,7 @@ config = MemoryConfig()  # in memory, gone when the process ends
 
 ### Upgrading Grafeo (0.5 to 0.6)
 
-grafeo-memory 0.3.0 requires Grafeo 0.6.2 or later (`grafeo>=0.6.2,<0.7`); for Grafeo 0.5, stay on grafeo-memory 0.2.x.
+grafeo-memory 0.3 and later require Grafeo 0.6.2 or later (`grafeo>=0.6.2,<0.7`); for Grafeo 0.5, stay on grafeo-memory 0.2.x.
 Grafeo 0.6 writes a new database format, and the switch is one way:
 
 1. **Before the first open with 0.6**, stop every process that uses the database (your app, `grafeo-memory`,
@@ -202,9 +202,8 @@ Grafeo 0.6 writes a new database format, and the switch is one way:
 
 Your memories, embeddings, entities, relations, communities and history are ordinary graph data, so they move with
 the database: grafeo-memory needs no migration step of its own, and vector search works on the migrated database
-right away. History written by grafeo-memory 0.2.3 (`:History` nodes) and by 0.1.x (`HAS_HISTORY` edges) carries
-over. grafeo-memory 0.2.2 read history from Grafeo's change data capture, which Grafeo 0.5 keeps in memory only, so
-a 0.2.2 database holds no history to carry over.
+right away. Grafeo's own guide is [Upgrading to 0.6](https://docs.grafeo.dev/get-started/upgrading/0.6/);
+release notes are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Memory History
 
@@ -228,8 +227,6 @@ for entry in memory.history(mid):
 - grafeo-memory does not need Grafeo's change data capture (CDC is off by default and kept in memory only). A
   database you pass in with `db=` keeps its CDC setting.
 - Only changes made through grafeo-memory are history; writes made directly with the Grafeo API are not.
-- grafeo-memory 0.2.0 to 0.2.2 read history from CDC and never stored it, so memories written by those versions
-  have no entries from before the upgrade.
 - `delete()` and `delete_all()` keep the history as an audit trail. Entries carry the `user_id`, so with the
   database at hand (pass it in with `db=`) you can remove a user's history as well:
 
@@ -342,7 +339,7 @@ Custom providers implement `DecisionModel.decide_async(state, questions)` and re
 candidate memories they are compared with) is also sent to TypeSafe's hosted API. `temporal_precheck`, `ontology`
 and `compile()` run locally and send nothing.
 
-All `PipelineConfig` toggles default to off, which is the 0.2 pipeline:
+All `PipelineConfig` toggles default to off:
 
 | Toggle | Effect |
 | --- | --- |
@@ -628,6 +625,8 @@ grafeo-memory is part of the GrafeoDB ecosystem:
 - **grafeo-memory-mcp** (built-in): MCP server for the memory API (`uv add grafeo-memory[mcp,openai]`)
 
 All packages share the same database file. Build memories with grafeo-memory, query them with grafeo-langchain, expose them via MCP.
+
+Docs and the other Grafeo AI tools: [grafeo.ai](https://grafeo.ai).
 
 ## Requirements
 
