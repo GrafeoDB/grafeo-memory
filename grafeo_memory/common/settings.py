@@ -38,6 +38,8 @@ class GrafeoMemorySettings(BaseSettings):
     db: str | None = None
     user: str = "default"
     yolo: bool = False
+    # "lexical": search() finds query entities without a model call (see RetrievalConfig.query_entities)
+    query_entities: str | None = None
 
     # --- GRAFEO_MEMORY_CACHE_* ---
     cache_enabled: bool = False
@@ -100,4 +102,29 @@ class GrafeoMemorySettings(BaseSettings):
             config.db_spill_limit_bytes = self.db_spill_limit_mb * MB
         if self.decision_model is not None and config.decision_model is None:
             config.decision_model = self.decision_model
+        if self.query_entities is not None:
+            config.retrieval.query_entities = self.query_entities
+            config.__post_init__()  # validate the value
         return config
+
+
+def load_entry_point_env() -> None:
+    """Prepare the process environment for the CLI and the MCP server.
+
+    Model providers (pydantic-ai) read their API keys from ``os.environ`` only, while
+    :class:`GrafeoMemorySettings` also reads :func:`~grafeo_memory.common.paths.env_file`
+    (``GRAFEO_MEMORY_ENV_FILE``). Load the working directory's ``.env`` and that file into the
+    environment, never overriding a variable that is already set, so a key that reaches the
+    settings also reaches the model. Also turns off pydantic-ai's startup banner.
+    """
+    import os
+
+    os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
+    try:
+        from dotenv import load_dotenv
+    except ImportError:  # python-dotenv is a dependency; tolerate a stripped install
+        return
+    load_dotenv()
+    path = env_file()
+    if path.is_file():
+        load_dotenv(path)

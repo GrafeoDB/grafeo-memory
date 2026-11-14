@@ -886,14 +886,21 @@ class _MemoryCore:
 
         # Extract entities asynchronously to avoid nested run_sync() deadlock
         # when graph_search is called from within this async context.
-        from grafeo_memory.common.types import Fact
-        from grafeo_memory.core.extraction.entities import extract_entities_async
+        from grafeo_memory.common.types import Entity, Fact
 
-        try:
-            entities, _ = await extract_entities_async(self._model, [Fact(text=query)], uid, _on_usage=on_usage)
-        except Exception:
-            logger.warning("_search: entity extraction failed for query=%r", query, exc_info=True)
-            entities = []
+        if self._config.retrieval.query_entities == "lexical":
+            from grafeo_memory.services import retrieval
+
+            # names and merged aliases already in the store, whole words only: no model call
+            entities = [Entity(name=n, entity_type="") for n in retrieval.query_entities(self, uid, query, [])]
+        else:
+            from grafeo_memory.core.extraction.entities import extract_entities_async
+
+            try:
+                entities, _ = await extract_entities_async(self._model, [Fact(text=query)], uid, _on_usage=on_usage)
+            except Exception:
+                logger.warning("_search: entity extraction failed for query=%r", query, exc_info=True)
+                entities = []
 
         if _trace is not None:
             _trace.append(

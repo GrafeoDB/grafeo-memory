@@ -127,16 +127,11 @@ def _create_embedder(model: str):
 
 def _create_manager(args: argparse.Namespace):
     """Build a MemoryManager from CLI args + settings (env/.env)."""
-    from grafeo_memory.common.settings import GrafeoMemorySettings
+    from grafeo_memory.common.settings import GrafeoMemorySettings, load_entry_point_env
     from grafeo_memory.common.types import MemoryConfig
     from grafeo_memory.services.memory import MemoryManager
 
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv()
-    except ImportError:
-        pass
+    load_entry_point_env()
     settings = GrafeoMemorySettings()
 
     model = args.model or settings.model

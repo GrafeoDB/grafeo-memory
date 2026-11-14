@@ -205,6 +205,10 @@ class RetrievalConfig:
     # entities (ladder rungs 1-2) -> relation expansion -> memories of those entities,
     # boosted and filled in by vector similarity within that set.
     order: str = "vector"
+    # How search() finds the entities a query names, for graph search and deterministic order:
+    # "llm" asks the model (one call per search); "lexical" matches whole-word entity names and
+    # merged aliases already in the store, with no model call.
+    query_entities: str = "llm"
     expansion_depth: int = 1  # relation hops from the mentioned entities (0 = only them)
     deterministic_boost: float = 0.2  # score multiplier bonus for memories in the deterministic set
     deterministic_cap: int = 200  # max memories pulled from the deterministic set
@@ -564,6 +568,10 @@ class MemoryConfig:
                 raise ValueError(f"policy.shape_severity values must be violation/warning/info, got {sev!r}")
         if self.retrieval.expansion_depth < 0:
             raise ValueError("retrieval.expansion_depth must be >= 0")
+        if self.retrieval.query_entities not in ("llm", "lexical"):
+            raise ValueError(
+                f"retrieval.query_entities must be 'llm' or 'lexical', got {self.retrieval.query_entities!r}"
+            )
         if not 0.0 < self.retrieval.hub_share <= 1.0:
             raise ValueError("retrieval.hub_share must be in (0, 1]")
         if self.compilation.every_n_adds < 0:

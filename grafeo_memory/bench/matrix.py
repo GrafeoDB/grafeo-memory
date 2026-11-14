@@ -292,6 +292,7 @@ def cells_for_round(round_id: int) -> list[dict]:
             cell("r17_det_d0", extra_flags=k100 + sets("retrieval.order=deterministic", "retrieval.expansion_depth=0")),
             cell("r17_det_d1", extra_flags=k100 + sets("retrieval.order=deterministic")),
             cell("r17_allen", extra_flags=k100 + sets("retrieval.temporal_filter=true")),
+            cell("r17_lexical", extra_flags=k100 + sets("retrieval.query_entities=lexical")),
         ]
     if round_id == 18:  # Layer D: write-time rung 3 and interval closing
         return [
@@ -324,6 +325,7 @@ def cells_for_round(round_id: int) -> list[dict]:
                 for b in ("0.1", "0.5", "1.0")
             ],
             cell("r20_allen", extra_flags=k20 + sets("retrieval.temporal_filter=true")),
+            cell("r20_lexical", extra_flags=k20 + sets("retrieval.query_entities=lexical")),
             cell("r20_tax_soft", extra_flags=[*k20, "--taxonomy"]),
             cell("r20_tax_filter", extra_flags=[*k20, "--taxonomy", *sets("taxonomy.mode=filter")]),
         ]
