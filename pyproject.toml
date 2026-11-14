@@ -65,6 +65,7 @@ packages = ["grafeo_memory"]
 exclude = [
     ".claude/",
     ".benchmarks/",
+    ".github/readme/",
     "coverage.xml",
     "*.llmcache.jsonl",
     "*.grafeo",
