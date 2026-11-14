@@ -58,14 +58,9 @@ def _create_embedder(model: str):
 
 def _create_manager() -> AsyncMemoryManager:
     """Build an AsyncMemoryManager from settings (env/.env)."""
-    from grafeo_memory.common.settings import GrafeoMemorySettings
+    from grafeo_memory.common.settings import GrafeoMemorySettings, load_entry_point_env
 
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv()
-    except ImportError:
-        pass
+    load_entry_point_env()
     settings = GrafeoMemorySettings()
 
     model = settings.model

@@ -53,6 +53,7 @@ def graph_search(
     query_embedding: list[float] | None = None,
     search_depth: int = 1,
     graph_name: str | None = None,
+    include_expired: bool = False,
 ) -> list[SearchResult]:
     """Search by extracting entities from the query and finding linked memories.
 
@@ -69,7 +70,7 @@ def graph_search(
         entities = _entities
     else:
         try:
-            entities, _ = extract_entities(model, [Fact(text=query)], user_id, _on_usage=_on_usage)
+            entities, _ = extract_entities(model, [Fact(text=query)], _on_usage=_on_usage)
         except Exception:
             logger.warning("graph_search: entity extraction failed for query=%r", query, exc_info=True)
             return []
@@ -140,8 +141,8 @@ def graph_search(
                     mem_node = db.get_node(int(vals[0]))
                     mem_props = _get_props(mem_node) if mem_node else {}
 
-                    # Skip expired memories (soft-deleted)
-                    if mem_props.get("expired_at") is not None:
+                    # Skip expired (superseded or deleted) memories unless asked for
+                    if not include_expired and mem_props.get("expired_at") is not None:
                         continue
 
                     # Compute score from embedding similarity if available
@@ -196,7 +197,7 @@ def graph_search(
                 seen_memory_ids.add(mem_id)
                 mem_node = db.get_node(int(vals[0]))
                 mem_props = _get_props(mem_node) if mem_node else {}
-                if mem_props.get("expired_at") is not None:
+                if not include_expired and mem_props.get("expired_at") is not None:
                     continue
                 mem_text = str(vals[1]) if vals[1] else ""
                 # 2-hop results get a discount (0.7x) to prefer direct matches

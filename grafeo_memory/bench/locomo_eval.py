@@ -586,7 +586,12 @@ async def run_all(args) -> None:
     samples = ensure_data()
     run_dir = RUNS_DIR / args.run
     run_dir.mkdir(parents=True, exist_ok=True)
-    json.dump(vars(args), open(run_dir / "args.json", "w"), indent=1, default=str)
+    from grafeo_memory.core.prompts import PROMPTS_VERSION
+
+    # runs on different prompt versions are never compared
+    json.dump(
+        {**vars(args), "prompts_version": PROMPTS_VERSION}, open(run_dir / "args.json", "w"), indent=1, default=str
+    )
     client = Mistral()
     conv_ids = [int(c) for c in args.convs.split(",")] if args.convs != "all" else list(range(len(samples)))
     selected = [samples[i] for i in conv_ids]

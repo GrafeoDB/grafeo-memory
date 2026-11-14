@@ -23,18 +23,22 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-# Python's clock and grafeo's commit clock differ in granularity (about 16 ms for
-# datetime.now() on Windows with Python 3.12), so a point taken right after a write can
-# read as earlier than that write. Leave a margin on both sides of every point.
-_CLOCK_MARGIN = 0.03
+# Python's clock and grafeo's commit clock are two clocks: on a Windows runner a wall-clock
+# point taken between two writes can land on the wrong side of one. Points between writes
+# are the engine's own epoch (exact); wall-clock points are taken only well after the last
+# write, or, for the datetime conversion itself, with a wide margin on both sides.
+_CLOCK_MARGIN = 0.3
 
 
-def _point() -> datetime:
-    """A point strictly after the writes before it and before the writes after it."""
+def _point(db) -> int:
+    """The epoch after the writes so far and before the next one."""
+    return db.current_epoch()
+
+
+def _later() -> datetime:
+    """A wall-clock point after every write so far."""
     time.sleep(_CLOCK_MARGIN)
-    point = _now()
-    time.sleep(_CLOCK_MARGIN)
-    return point
+    return _now()
 
 
 class TestConfig:
@@ -62,13 +66,13 @@ class TestTimeTravel:
         manager = make_manager([], history_retention="forever")
         db = manager._db
         db.execute(f"INSERT (:{MEMORY_LABEL} {{text: 'first', user_id: 'test_user'}})")
-        point = _point()
+        point = _point(db)
         db.execute(f"INSERT (:{MEMORY_LABEL} {{text: 'second', user_id: 'test_user'}})")
         db.execute(f"MATCH (m:{MEMORY_LABEL} {{text: 'first'}}) SET m.text = 'first!'")
 
         rows = manager.execute_as_of(f"MATCH (m:{MEMORY_LABEL}) RETURN m.text AS t ORDER BY t", point)
         assert rows == [{"t": "first"}]
-        rows = manager.execute_as_of(f"MATCH (m:{MEMORY_LABEL}) RETURN m.text AS t ORDER BY t", _now())
+        rows = manager.execute_as_of(f"MATCH (m:{MEMORY_LABEL}) RETURN m.text AS t ORDER BY t", _later())
         assert rows == [{"t": "first!"}, {"t": "second"}]
         manager.close()
 
@@ -76,7 +80,9 @@ class TestTimeTravel:
         manager = make_manager([], history_retention="forever")
         db = manager._db
         db.execute(f"INSERT (:{MEMORY_LABEL} {{text: 'a'}}), (:{MEMORY_LABEL} {{text: 'b'}})")
-        epoch = db.epoch_as_of(_point())
+        time.sleep(_CLOCK_MARGIN)  # the datetime conversion itself: a point well clear of both writes
+        epoch = db.epoch_as_of(_now())
+        time.sleep(_CLOCK_MARGIN)
         db.execute(f"INSERT (:{MEMORY_LABEL} {{text: 'c'}})")
         rows = manager.execute_as_of(
             f"MATCH (m:{MEMORY_LABEL}) WHERE m.text = $t RETURN m.text AS t", epoch, {"t": "c"}
@@ -88,18 +94,18 @@ class TestTimeTravel:
         manager = make_manager([], history_retention="forever")
         db = manager._db
         node = db.create_node([MEMORY_LABEL], {"text": "before", "user_id": "test_user"})
-        point = _point()
+        point = _point(db)
         db.set_node_property(node.id, "text", "after")
 
         old = manager.get_memory_as_of(str(node.id), point)
         assert old is not None and old["properties"]["text"] == "before" and old["labels"] == [MEMORY_LABEL]
-        assert manager.get_memory_as_of(str(node.id), _now())["properties"]["text"] == "after"
+        assert manager.get_memory_as_of(str(node.id), _later())["properties"]["text"] == "after"
         manager.close()
 
     def test_get_memory_as_of_unknown_or_not_yet_existing(self):
         manager = make_manager([], history_retention="forever")
         db = manager._db
-        point = _point()
+        point = _point(db)
         node = db.create_node([MEMORY_LABEL], {"text": "new"})
         assert manager.get_memory_as_of(str(node.id), point) is None, "created after the point"
         assert manager.get_memory_as_of("not-a-number", point) is None
@@ -109,7 +115,7 @@ class TestTimeTravel:
         manager = make_manager([], history_retention="forever")
         db = manager._db
         db.execute(f"INSERT (:{MEMORY_LABEL} {{text: 'kept'}})")
-        point = _point()
+        point = _point(db)
         with manager.as_of(point) as view:
             assert list(view.execute(f"MATCH (m:{MEMORY_LABEL}) RETURN m.text AS t")) == [{"t": "kept"}]
             with pytest.raises(grafeo.GrafeoError):
@@ -136,7 +142,7 @@ class TestTimeTravel:
         path = str(tmp_path / "mem.grafeo")
         manager = make_manager([], db_path=path, history_retention="forever")
         manager._db.execute(f"INSERT (:{MEMORY_LABEL} {{text: 'persisted'}})")
-        point = _point()
+        point = _point(manager._db)
         manager._db.execute(f"INSERT (:{MEMORY_LABEL} {{text: 'later'}})")
         manager.close()
 
@@ -153,7 +159,7 @@ class TestTimeTravel:
         node = db.create_node([MEMORY_LABEL], {"text": "v1", "user_id": "test_user"})
         entry = HistoryEntry(event="ADD", new_text="v1")
         record_history(db, node.id, entry, user_id="test_user")
-        time.sleep(0.05)
+        time.sleep(2 * _CLOCK_MARGIN)  # the point below sits one margin after the entry
         db.set_node_property(node.id, "text", "v2")
 
         # the entry's wall-clock ms can trail the engine's commit by the clock granularity
@@ -174,7 +180,7 @@ class TestAsyncFacade:
             config = MemoryConfig(user_id="test_user", embedding_dimensions=16, history_retention="forever")
             manager = AsyncMemoryManager(make_test_model([]), config, embedder=MockEmbedder(16))
             manager._db.execute(f"INSERT (:{MEMORY_LABEL} {{text: 'async'}})")
-            point = _point()
+            point = _point(manager._db)
             manager._db.execute(f"INSERT (:{MEMORY_LABEL} {{text: 'later'}})")
 
             rows = await manager.execute_as_of(f"MATCH (m:{MEMORY_LABEL}) RETURN m.text AS t ORDER BY t", point)

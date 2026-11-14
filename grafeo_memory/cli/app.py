@@ -35,6 +35,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_add.add_argument("text", help="Text to add (use '-' for stdin)")
     p_add.add_argument("--type", "-t", dest="memory_type", default="semantic", choices=["semantic", "procedural"])
     p_add.add_argument("--no-infer", action="store_true", help="Store raw without LLM extraction")
+    p_add.add_argument("--speaker", help="Who said the text (default: the user)")
+    p_add.add_argument(
+        "--source",
+        choices=["chat", "notes"],
+        default="chat",
+        help="'notes' for notes and documents, which have no speaker",
+    )
 
     # search
     p_search = sub.add_parser("search", help="Search memories")
@@ -127,16 +134,11 @@ def _create_embedder(model: str):
 
 def _create_manager(args: argparse.Namespace):
     """Build a MemoryManager from CLI args + settings (env/.env)."""
-    from grafeo_memory.common.settings import GrafeoMemorySettings
+    from grafeo_memory.common.settings import GrafeoMemorySettings, load_entry_point_env
     from grafeo_memory.common.types import MemoryConfig
     from grafeo_memory.services.memory import MemoryManager
 
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv()
-    except ImportError:
-        pass
+    load_entry_point_env()
     settings = GrafeoMemorySettings()
 
     model = args.model or settings.model
@@ -203,7 +205,9 @@ def _cmd_add(manager, args: argparse.Namespace) -> None:
         print("Error: no text provided.", file=sys.stderr)
         sys.exit(1)
 
-    events = manager.add(text, memory_type=args.memory_type, infer=not args.no_infer)
+    events = manager.add(
+        text, memory_type=args.memory_type, infer=not args.no_infer, speaker=args.speaker, source=args.source
+    )
     _print_events(list(events), json_mode=args.output_json)
 
 
@@ -351,7 +355,8 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
         return
 
-    manager = _create_manager(args)
+    base = _create_manager(args)
+    manager = base.for_user(_user_id(args))  # commands by id reach this user's memories only
     try:
         handler = _COMMANDS[args.command]
         handler(manager, args)
@@ -365,4 +370,4 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     finally:
-        manager.close()
+        base.close()

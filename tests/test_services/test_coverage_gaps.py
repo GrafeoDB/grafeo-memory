@@ -193,7 +193,7 @@ class TestCrossSessionBoostPipeline:
         manager.close()
 
     def test_recompute_metrics_stores_properties(self):
-        """After add with enable_graph_algorithms, nodes should have _pagerank."""
+        """compile() stores _pagerank; search() only reads it."""
         manager = _make_manager(
             [
                 _extraction(
@@ -210,17 +210,13 @@ class TestCrossSessionBoostPipeline:
         )
         manager.add("Alice works at Acme")
 
-        # Trigger recompute via search
-        manager.search("alice")
+        def has_pagerank() -> bool:
+            return any("_pagerank" in props for _id, props in manager._db.get_nodes_by_label(MEMORY_LABEL))
 
-        # Check that at least some nodes have _pagerank set
-        nodes = manager._db.get_nodes_by_label(MEMORY_LABEL)
-        found_pagerank = False
-        for _node_id, props in nodes:
-            if "_pagerank" in props:
-                found_pagerank = True
-                break
-        assert found_pagerank, "Expected _pagerank property on at least one node after graph metrics recompute"
+        manager.search("alice")
+        assert not has_pagerank(), "search() must not recompute graph metrics"
+        manager.compile()
+        assert has_pagerank(), "Expected _pagerank property on at least one node after compile()"
         manager.close()
 
 

@@ -40,7 +40,7 @@ _MONTH_NAMES = [
 _MONTHS = {name: i + 1 for i, names in enumerate(_MONTH_NAMES) for name in names}
 _MONTH_ALT = "|".join(sorted(_MONTHS, key=len, reverse=True))
 _YEAR = r"(?:19|20)\d{2}"
-_ORD = r"(?:st|nd|rd|th)?"
+_ORD = r"(?:st|and|rd|th)?"
 
 # Longest forms first. The ISO month form must not swallow a year range ("2020-2022").
 _DATE = re.compile(

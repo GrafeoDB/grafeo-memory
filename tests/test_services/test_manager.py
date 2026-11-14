@@ -1661,7 +1661,7 @@ class TestHistoryOrdering:
             manager.update(memory_id, new_text)
 
         history = manager.history(memory_id)
-        # Should have ADD + 3 UPDATEs = 4 entries
+        # Should have ADD + 3 UPDATE entries = 4 entries
         assert len(history) >= 4
         # Timestamps should be non-decreasing
         for i in range(1, len(history)):
@@ -1671,7 +1671,7 @@ class TestHistoryOrdering:
         manager.close()
 
     def test_history_preserves_old_and_new_text(self):
-        """History entries should record old_text and new_text for UPDATEs."""
+        """History entries should record old_text and new_text for UPDATE events."""
         manager = _make_manager(
             [
                 {"facts": ["fact v1"], "entities": [], "relations": []},
@@ -1857,7 +1857,7 @@ class TestDeleteReconciliation:
                 },
                 {
                     "decisions": [
-                        {"action": "delete", "text": "", "target_memory_id": mid},
+                        {"action": "delete", "text": "", "target_memory_id": "m1"},  # mid, the only candidate
                     ]
                 },
             ],
@@ -2050,8 +2050,8 @@ class TestAsyncManagerProvenanceAndCommunities:
                     "entities": [alice, acme],
                     "relations": [{"source": "alice", "target": "acme_corp", "relation_type": "works_at"}],
                 },
-                {"name": "Acme staff", "summary": "Alice works at Acme Corp."},  # community summary
                 {"entities": [], "relations": []},  # query entity extraction
+                {"name": "Acme staff", "summary": "Alice works at Acme Corp."},  # community summary
             ],
             enable_graph_algorithms=True,
             enable_community_summaries=True,
@@ -2060,6 +2060,8 @@ class TestAsyncManagerProvenanceAndCommunities:
         async def run():
             await manager.add("Alice works at Acme Corp")
             await manager.search("who works at acme?")
+            assert manager.get_communities() == [], "search never builds communities"
+            await manager.acompile()
             (community,) = manager.get_communities()
             assert community.name == "Acme staff"
             assert sorted(community.member_entities) == ["acme_corp", "alice"]

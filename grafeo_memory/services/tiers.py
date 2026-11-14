@@ -12,11 +12,16 @@
 - ``end_session()``: promotes the window (extraction when deferred) and stores the
   session summary as an episodic memory.
 - ``add_instruction()``: a user-stated procedural memory, certified by definition.
+- Sessions: ``start_session()`` registers a session id. An anonymous session only buffers
+  its turns in memory (never long-term memory) and expires after ``session_ttl``; starting
+  it again from a user's manager binds it to that user, one way, and stores its turns.
 """
 
 from __future__ import annotations
 
 import logging
+import time
+import uuid
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
@@ -38,6 +43,86 @@ logger = logging.getLogger(__name__)
 
 def _key(uid: str, sid: str | None) -> str:
     return f"{uid}\x00{sid or ''}"
+
+
+ANON = ""  # the window owner of an anonymous session
+
+
+def _now() -> float:
+    return time.monotonic()
+
+
+def _purge(m: _MemoryCore) -> None:
+    """Drop the turns of anonymous sessions idle longer than ``tiers.working.session_ttl`` seconds.
+
+    The id stays registered as anonymous, so a caller still holding it can never write
+    long-term memory with it.
+    """
+    ttl = m._config.tiers.working.session_ttl
+    cutoff = _now() - ttl
+    for sid, (owner, seen) in list(m._sessions.items()):
+        if owner is None and seen < cutoff:
+            m._windows.pop(_key(ANON, sid), None)
+            m._summaries.pop(_key(ANON, sid), None)
+
+
+def discard(m: _MemoryCore, sid: str) -> None:
+    m._sessions.pop(sid, None)
+    m._windows.pop(_key(ANON, sid), None)
+    m._summaries.pop(_key(ANON, sid), None)
+
+
+def is_anonymous(m: _MemoryCore, sid: str | None) -> bool:
+    entry = m._sessions.get(sid) if sid else None
+    return entry is not None and entry[0] is None
+
+
+async def start_session(m: _MemoryCore, uid: str, sid: str | None, anonymous: bool, on_usage=None) -> str:
+    _purge(m)
+    sid = sid or uuid.uuid4().hex
+    entry = m._sessions.get(sid)
+    owner = entry[0] if entry is not None else None
+    if anonymous:
+        if entry is not None and owner is not None:
+            raise ValueError(f"session {sid!r} is bound to a user; it cannot become anonymous")
+        m._sessions[sid] = (None, _now())
+        return sid
+    if entry is not None and owner is not None and owner != uid:
+        raise ValueError(f"session {sid!r} belongs to another user")
+    if entry is not None and owner is None:
+        await _bind(m, uid, sid, on_usage)  # raises before any state changes
+    m._sessions[sid] = (uid, _now())
+    return sid
+
+
+async def _bind(m: _MemoryCore, uid: str, sid: str, on_usage=None) -> None:
+    """The anonymous session joins ``uid``: its window moves to the user, and its turns are
+    extracted now (or at ``end_session()`` with ``defer_extraction``)."""
+    cfg = m._config.tiers.working
+    window = list(m._windows.get(_key(ANON, sid), []))
+    deferred = cfg.enabled and cfg.defer_extraction
+    if window and not deferred:
+        # A failure raises here and leaves the session anonymous with its turns, to bind again.
+        await m._add(window, user_id=uid, session_id=sid, infer=True, _from_window=True)
+    m._windows.pop(_key(ANON, sid), None)
+    summary = m._summaries.pop(_key(ANON, sid), None)
+    if cfg.enabled:
+        key = _key(uid, sid)
+        m._windows[key] = [*window, *m._windows.get(key, [])]
+        if not deferred:
+            del m._windows[key][: max(0, len(m._windows[key]) - cfg.window_messages)]
+        if summary:
+            m._summaries.setdefault(key, summary)
+
+
+def buffer_anonymous(m: _MemoryCore, sid: str, parsed: Sequence[Mapping]) -> None:
+    """An anonymous session keeps its last ``window_messages`` turns in memory only, until it
+    binds or expires."""
+    _purge(m)
+    m._sessions[sid] = (None, _now())
+    window = m._windows.setdefault(_key(ANON, sid), [])
+    window.extend({"role": p.get("role", "user"), "content": str(p.get("content", ""))} for p in parsed)
+    del window[: max(0, len(window) - m._config.tiers.working.window_messages)]
 
 
 async def buffer(m: _MemoryCore, uid: str, sid: str | None, parsed: Sequence[Mapping], on_usage=None) -> None:
@@ -97,13 +182,21 @@ async def add_instruction(m: _MemoryCore, text: str, uid: str, *, source: str = 
 
 
 async def end_session(m: _MemoryCore, uid: str, sid: str | None, on_usage=None) -> AddResult:
-    """Promote the session: extraction over the deferred window, then the summary as an episodic memory."""
+    """Promote the session: extraction over the deferred window, then the summary as an episodic memory.
+    An anonymous session is discarded."""
+    from pydantic_ai.usage import RunUsage
+
+    if is_anonymous(m, sid):
+        discard(m, sid)  # ty: ignore[invalid-argument-type]
+        return AddResult(usage=RunUsage())
+    if sid and sid in m._sessions:
+        if m._sessions[sid][0] != uid:
+            raise ValueError(f"session {sid!r} belongs to another user")
+        del m._sessions[sid]
     cfg = m._config.tiers.working
     key = _key(uid, sid)
     window = m._windows.pop(key, [])
     summary = m._summaries.pop(key, None)
-    from pydantic_ai.usage import RunUsage
-
     total = RunUsage()
     events: list[MemoryEvent] = []
     if not cfg.promote_on_session_end:
@@ -148,13 +241,15 @@ async def assemble(
     cfg = m._config.tiers
     total = budget or cfg.working.token_budget
     block = ContextBlock(query=query, budget=total)
-    key = _key(uid, sid)
+    anonymous = is_anonymous(m, sid)
+    key = _key(ANON if anonymous else uid, sid)
     window = list(m._windows.get(key, []))
     block.summary = m._summaries.get(key)
 
-    results = list(await m._search(query, user_id=uid, k=k))
+    # An anonymous session has no long-term memory to read: its window and summary only.
+    results = [] if anonymous else list(await m._search(query, user_id=uid, k=k))
     procedural = [r for r in results if r.memory_type == "procedural"]
-    if cfg.procedural.enabled:
+    if cfg.procedural.enabled and not anonymous:
         seen = {r.memory_id for r in procedural}
         extra = await m._search(query, user_id=uid, k=k, memory_type=MemoryType.PROCEDURAL)
         procedural += [r for r in extra if r.memory_id not in seen]
@@ -179,7 +274,7 @@ async def assemble(
         block.sections[name] = taken
         used += cost
     block.tokens = used
-    if m._config.bucket_on:
+    if m._config.bucket_on and not anonymous:
         from grafeo_memory.services import bucket
 
         shown = {i.memory_id for i in block.items() if i.memory_id}

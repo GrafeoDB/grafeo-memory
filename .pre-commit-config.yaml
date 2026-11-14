@@ -1,7 +1,13 @@
-# Pre-commit hooks for grafeo-memory
-# Install: cargo install prek && prek install
-# Run manually: prek run --all-files
+# Pre-commit hooks for grafeo-memory: the same checks CI runs, so a push that passes here passes CI.
+# Install once per clone: cargo install prek && prek install   (installs the pre-commit and pre-push hooks)
+# Run manually: prek run --all-files   (pre-push stage: prek run --all-files --hook-stage pre-push)
 # Docs: https://github.com/j178/prek
+#
+# On commit: hygiene, typos, ruff check, ruff format, ty, lockfile check (fast).
+# On push: the full test suite, on this machine's OS (catches the Windows-only failures before CI).
+
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
 
 repos:
   # Built-in prek hooks
@@ -29,19 +35,34 @@ repos:
     hooks:
       - id: ruff-check
         name: ruff check
-        entry: uv run ruff check --fix --exit-non-zero-on-fix
+        entry: uv run --frozen ruff check --fix --exit-non-zero-on-fix
         language: system
         types: [python]
 
       - id: ruff-format
         name: ruff format
-        entry: uv run ruff format
+        entry: uv run --frozen ruff format
         language: system
         types: [python]
 
       - id: ty-check
         name: ty check
-        entry: uv run ty check .
+        entry: uv run --frozen ty check .
         language: system
         pass_filenames: false
         types: [python]
+
+      - id: uv-lock-check
+        name: uv lock --check
+        entry: uv lock --check
+        language: system
+        pass_filenames: false
+        files: '^(pyproject\.toml|uv\.lock)$'
+
+      - id: pytest
+        name: pytest (full suite)
+        entry: uv run --frozen pytest -q -p no:cacheprovider --no-cov
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

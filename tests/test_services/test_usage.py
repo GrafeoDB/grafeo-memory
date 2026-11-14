@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic_ai.usage import RunUsage
 
 from grafeo_memory import AddResult, MemoryConfig, MemoryManager, SearchResponse
+from grafeo_memory.common.types import RetrievalConfig
 from tests.mock_llm import MockEmbedder, make_test_model
 
 
@@ -150,7 +151,7 @@ class TestUsageOnAdd:
 
         model = make_test_model(
             [
-                {"decisions": [{"action": "NONE", "text": "alice works at acme", "target_memory_id": "1"}]},
+                {"decisions": [{"action": "NONE", "text": "alice works at acme", "target_memory_id": "m1"}]},
             ]
         )
         calls: list[tuple[str, RunUsage]] = []
@@ -203,7 +204,11 @@ class TestUsageOnSearch:
             ]
         )
         calls: list[tuple[str, RunUsage]] = []
-        manager = _make_manager(model, usage_callback=lambda op, u: calls.append((op, u)))
+        manager = _make_manager(
+            model,
+            usage_callback=lambda op, u: calls.append((op, u)),
+            retrieval=RetrievalConfig(query_entities="llm"),  # the default, lexical, makes no model call
+        )
         manager.add("Alice works at Acme", user_id="u1")
         calls.clear()
 

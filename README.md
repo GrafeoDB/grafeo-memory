@@ -32,6 +32,8 @@ uv add grafeo-memory[all]              # all LLM providers
 
 ### OpenAI
 
+Set `OPENAI_API_KEY` first (for Mistral, `MISTRAL_API_KEY`).
+
 ```python
 from openai import OpenAI
 from grafeo_memory import MemoryManager, MemoryConfig, OpenAIEmbedder
@@ -40,20 +42,24 @@ embedder = OpenAIEmbedder(OpenAI())
 config = MemoryConfig(db_path="./memory.grafeo", user_id="alice")
 
 with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
-    # Add memories from conversation
-    events = memory.add("I just started a new job at Acme Corp as a data scientist")
-    # -> [ADD "alice works at acme_corp", ADD "alice is a data_scientist"]
+    for event in memory.add("I just started a new job at Acme Corp as a data scientist", speaker="Alice"):
+        print(event.action.value, event.text)
+    # add Alice works at Acme Corp as a data scientist.
 
-    events = memory.add("I've been promoted to senior data scientist at Acme")
-    # -> [UPDATE "alice is a senior data scientist at acme_corp"]
+    memory.add("I've been promoted to senior data scientist at Acme", speaker="Alice")
+    # update Alice is a senior data scientist at Acme Corp.
 
-    events = memory.add("I left Acme and joined Beta Inc")
-    # -> [DELETE "alice works at acme_corp", ADD "alice works at beta_inc"]
+    memory.add("I left Acme and joined Beta Inc", speaker="Alice")
+    # update Alice left Acme Corp and works at Beta Inc.
 
-    # Search
-    results = memory.search("Where does Alice work?")
-    # -> [SearchResult(text="alice works at beta_inc", score=0.92, ...)]
+    for result in memory.search("Where does Alice work?"):
+        print(round(result.score, 2), result.text)
+    # 0.92 Alice left Acme Corp and works at Beta Inc.
 ```
+
+The exact wording depends on the model. `user_id` partitions the store and never reaches the model; `speaker`
+names who is talking (without it, facts say "the user"), and `source="notes"` marks notes or documents, which have
+no speaker.
 
 ### Mistral
 
@@ -120,6 +126,35 @@ with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
     carol_results = memory.search("vacation preferences", user_id="carol")
     # -> beach vacations
 ```
+
+`user_id` on each call is a partition, not a permission: the unbound manager serves every user, and a call by
+id (`update`, `delete`, `history`) reaches any memory in its scope. A server that acts for one user at a time
+should use a view:
+
+```python
+bob = memory.for_user("bob")  # shares the database and caches
+bob.add("I moved to Lisbon")
+bob.delete(carol_memory_id)  # False: another user's memory is out of reach
+bob.search("city", user_id="carol")  # ValueError: the view is bound to bob
+```
+
+grafeo-memory does not authenticate anyone: the host application verifies who the user is and passes that id.
+The CLI and the MCP server act through such a view for their `user_id` (default `GRAFEO_MEMORY_USER`).
+
+### Sessions
+
+```python
+sid = memory.start_session(anonymous=True)  # a visitor: turns stay in memory only
+memory.add("I'm looking for a quiet hotel", session_id=sid)
+context = memory.assemble("hotel", sid)  # the session window, nothing long-term
+
+memory.for_user("bob").start_session(sid)  # bob signs in: the session joins bob, one way
+memory.for_user("bob").end_session(sid)  # promoted to bob's long-term memory
+```
+
+An anonymous session never writes long-term memory; `end_session()` discards it, and it expires
+`tiers.working.session_ttl` seconds (default 3600) after its last turn. Binding stores its turns for the user once
+(at `end_session()` with `tiers.working.defer_extraction`). Sessions live in the process, not in the database file.
 
 ## Persistence
 
@@ -355,6 +390,24 @@ and decision-model calls in memory and, for a file database, in `<db_path>.llmca
 answered without reaching the provider. The cache file holds prompts and responses, which include memory text;
 delete it together with the database, or call `MemoryCache.clear()`.
 
+## CLI
+
+```bash
+export GRAFEO_MEMORY_DB="$HOME/.grafeo/memory.grafeo"   # an absolute path
+grafeo-memory add "I prefer uv over pip"
+grafeo-memory add "release tags are signed" --source notes
+grafeo-memory search "package manager" -k 5
+grafeo-memory list
+grafeo-memory history 42
+grafeo-memory delete 42
+grafeo-memory stats
+```
+
+Global flags: `--model`, `--db`, `--user` (each overrides its environment variable, see
+[Environment Variables](#environment-variables)) and `--json` for machine-readable output. `add` takes `--speaker`,
+`--source chat|notes`, `--type procedural` and `--no-infer`; `-` reads the text from stdin. Other commands:
+`update`, `summarize`, `explain`.
+
 ## MCP Server
 
 grafeo-memory includes a built-in MCP server so AI agents (Claude Desktop, Cursor, etc.) can use it as a tool.
@@ -367,6 +420,21 @@ uv add grafeo-memory[mcp,mistral]   # GRAFEO_MEMORY_MODEL=mistral:...
 The server needs the provider extra of its model too: OpenAI embeddings by default, Mistral embeddings for a
 `mistral:` model.
 
+Give the server an absolute database path: a client starts it in a working directory of its choosing, so
+`./memory.grafeo` lands in a different place per client.
+
+### Claude Code
+
+```bash
+claude mcp add grafeo-memory \
+  -e GRAFEO_MEMORY_MODEL=mistral:mistral-small-latest \
+  -e GRAFEO_MEMORY_DB=/home/me/.grafeo/memory.grafeo \
+  -e MISTRAL_API_KEY=... \
+  -- grafeo-memory-mcp
+```
+
+Or keep the keys in a file and pass `-e GRAFEO_MEMORY_ENV_FILE=/home/me/.grafeo/.env`.
+
 ### Claude Desktop
 
 Add to `claude_desktop_config.json`:
@@ -378,7 +446,8 @@ Add to `claude_desktop_config.json`:
       "command": "grafeo-memory-mcp",
       "env": {
         "GRAFEO_MEMORY_MODEL": "openai:gpt-4o-mini",
-        "GRAFEO_MEMORY_DB": "./memory.grafeo"
+        "GRAFEO_MEMORY_DB": "/Users/me/.grafeo/memory.grafeo",
+        "OPENAI_API_KEY": "..."
       }
     }
   }
@@ -403,14 +472,32 @@ Add to `claude_desktop_config.json`:
 | `memory_manage_roots` | Show or edit the subject roots that scope memories |
 | `memory_assemble` | Build a prompt-ready context block with provenance |
 | `memory_add_instruction` | Store a standing instruction, certified |
+| `memory_session_start` | Start a session (anonymous, or bound to a user) |
+| `memory_session_end` | End a session: promote a bound one, discard an anonymous one |
+
+`memory_add` treats its text as an agent's notes (`source="notes"`) unless told `source="chat"`, and takes
+`speaker` and `session_id`. Every tool acts for its `user_id` argument, else the server's default user, and reaches
+that user's memories only.
 
 ### Environment Variables
+
+The CLI and the MCP server read these from the environment, from `.env` in the working directory, and from the
+file named by `GRAFEO_MEMORY_ENV_FILE`; a variable that is already set wins, and an empty one counts as unset.
 
 | Variable | Default | Description |
 | -------- | ------- | ----------- |
 | `GRAFEO_MEMORY_MODEL` | `openai:gpt-4o-mini` | pydantic-ai model string |
-| `GRAFEO_MEMORY_DB` | *(in-memory)* | Database file path |
+| `GRAFEO_MEMORY_DB` | *(in-memory)* | Database file path; use an absolute path |
 | `GRAFEO_MEMORY_USER` | `default` | Default user ID |
+| `GRAFEO_MEMORY_ENV_FILE` | *(none)* | A `.env` file to read keys and settings from |
+| `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `GOOGLE_API_KEY` | *(none)* | Provider keys, never logged |
+| `GRAFEO_MEMORY_QUERY_ENTITIES` | `lexical` | `llm`: search asks the model for the entities a query names (one call per search) |
+| `GRAFEO_MEMORY_CACHE_ENABLED` | `false` | Cache LLM, embedding and decision calls |
+| `GRAFEO_MEMORY_CACHE_MAX_ENTRIES`, `GRAFEO_MEMORY_CACHE_MAX_MEMORY_MB`, `GRAFEO_MEMORY_CACHE_MAX_STORAGE_MB` | `10000`, `128`, `512` | Cache limits |
+| `GRAFEO_MEMORY_CACHE_PERSIST_PATH` | *(next to the database)* | Cache file |
+| `GRAFEO_MEMORY_DB_MEMORY_LIMIT_MB`, `GRAFEO_MEMORY_DB_SPILL_LIMIT_MB` | *(grafeo default)* | Engine memory and spill caps |
+| `GRAFEO_MEMORY_DECISION_MODEL`, `TYPESAFE_API_KEY` | *(none)* | Decision model name (`jev`) and its key |
+| `GRAFEO_MEMORY_LOG_LEVEL` | `WARNING` | Log level on stderr, secrets redacted |
 | `GRAFEO_MEMORY_YOLO` | *(off)* | Set to `1` for all features |
 
 ### Transport
@@ -462,7 +549,10 @@ config = MemoryConfig(
 ### `MemoryManager`
 
 - `MemoryManager(model, config=None, *, embedder)`: create memory manager. `model` is a pydantic-ai model string (e.g. `"openai:gpt-4o-mini"`)
-- `.add(messages, user_id=None, session_id=None, metadata=None, *, infer=True, importance=1.0, memory_type="semantic")` → `AddResult` (list of `MemoryEvent`)
+- `.add(messages, user_id=None, session_id=None, metadata=None, *, infer=True, importance=1.0, memory_type="semantic", speaker=None, source="chat")` → `AddResult` (list of `MemoryEvent`)
+- `.for_user(user_id)` → a view bound to one user (see [Multi-User Isolation](#multi-user-isolation))
+- `.start_session(session_id=None, *, anonymous=False)` → `str`; `.assemble(query, session_id, budget)` → `ContextBlock`; `.end_session(session_id)` → `AddResult` (see [Sessions](#sessions))
+- `.compile()` → `CompileResult`: the offline pass (entity merges, graph metrics, community summaries, layer upkeep)
 - `.search(query, user_id=None, k=10, *, filters=None, rerank=True, memory_type=None)` → `SearchResponse` (list of `SearchResult`)
 - `.update(memory_id, text)` → `MemoryEvent`: update a memory's text directly. Raises `ValueError` when `memory_id` is not a memory of this manager
 - `.get_all(user_id=None, memory_type=None)` → `list[SearchResult]`
@@ -536,7 +626,7 @@ All packages share the same database file. Build memories with grafeo-memory, qu
 
 ## Requirements
 
-- Python 3.12+
+- Python 3.13+
 - [grafeo](https://pypi.org/project/grafeo/) `>=0.6.2,<0.7` (installed automatically)
 
 ## License

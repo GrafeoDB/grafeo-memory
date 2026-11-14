@@ -173,3 +173,28 @@ def test_empty_log_level_means_default(monkeypatch):
     monkeypatch.setattr(logging, "basicConfig", lambda **kw: seen.update(kw))
     gm_logging.configure_entry_point_logging()
     assert seen["level"] == "WARNING"
+
+
+class TestLoadEntryPointEnv:
+    """Dogfooding 0.3.0: the CLI read MISTRAL_API_KEY from GRAFEO_MEMORY_ENV_FILE for the embedder,
+    but pydantic-ai's provider reads os.environ only, so every LLM call in search() failed."""
+
+    def test_env_file_keys_reach_os_environ_without_overriding(self, tmp_path, monkeypatch):
+        import os
+
+        from grafeo_memory.common.settings import load_entry_point_env
+
+        env = tmp_path / "keys.env"
+        env.write_text("GM_TEST_PROVIDER_KEY=from-file\nGM_TEST_ALREADY_SET=from-file\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)  # no .env in the working directory
+        monkeypatch.setenv("GRAFEO_MEMORY_ENV_FILE", str(env))
+        monkeypatch.delenv("GM_TEST_PROVIDER_KEY", raising=False)
+        monkeypatch.setenv("GM_TEST_ALREADY_SET", "from-shell")
+        monkeypatch.delenv("PYDANTIC_AI_NO_BANNER", raising=False)
+        try:
+            load_entry_point_env()
+            assert os.environ["GM_TEST_PROVIDER_KEY"] == "from-file"
+            assert os.environ["GM_TEST_ALREADY_SET"] == "from-shell"
+            assert os.environ["PYDANTIC_AI_NO_BANNER"] == "1"
+        finally:
+            os.environ.pop("GM_TEST_PROVIDER_KEY", None)

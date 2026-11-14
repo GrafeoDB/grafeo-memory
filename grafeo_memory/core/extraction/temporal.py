@@ -26,7 +26,7 @@ _YEAR_ONLY_RE = re.compile(r"^\d{4}$")
 def _parse_date_to_epoch_ms(date_str: str | None) -> int | None:
     """Parse an ISO-8601 date string (or year-only) to epoch milliseconds.
 
-    Returns None for unparseable or null input.
+    Returns None for unparsable or null input.
     """
     if not date_str:
         return None

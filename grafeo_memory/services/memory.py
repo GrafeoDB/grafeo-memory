@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import json
 import logging
 import math
@@ -11,7 +12,7 @@ import time
 from collections.abc import Iterable
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import Literal, overload
+from typing import Literal, Self, overload
 
 from grafeo_memory.common.types import (
     DERIVED_FROM_EDGE,
@@ -56,8 +57,14 @@ from grafeo_memory.core.history import (
 )
 from grafeo_memory.core.messages import Message, parse_messages
 from grafeo_memory.core.ontology.types import is_violation
+from grafeo_memory.core.prompts import PROMPTS_VERSION, SOURCES
 from grafeo_memory.core.protocol import GrafeoDBProtocol
-from grafeo_memory.core.reconciliation import filter_relation_candidates, reconcile_async, reconcile_relations_async
+from grafeo_memory.core.reconciliation import (
+    filter_relation_candidates,
+    merge_duplicate_decisions,
+    reconcile_async,
+    reconcile_relations_async,
+)
 from grafeo_memory.core.search import graph_search, hybrid_search, search_similar
 from grafeo_memory.core.search.vector import _get_props, _parse_metadata
 from grafeo_memory.providers.decision.protocol import DecisionModel
@@ -66,12 +73,35 @@ from grafeo_memory.providers.embedding import EmbeddingClient
 logger = logging.getLogger(__name__)
 
 
+class _SharedState:
+    """Mutable scalars a manager shares with its ``for_user()`` views (the dicts are shared by reference)."""
+
+    def __init__(self) -> None:
+        self.write_version = 0
+        self.graph_dirty = False
+        self.vector_index_ready = False
+        self.adds_since_compile = 0
+        self.limit_warned_pct = 0.0
+        self.embedding_dims = 0
+
+
+def _shared(name: str) -> property:
+    return property(lambda self: getattr(self._shared, name), lambda self, v: setattr(self._shared, name, v))
+
+
 class _MemoryCore:
     """Shared initialization and async internal methods.
 
     Both MemoryManager (sync) and AsyncMemoryManager (async) inherit
     from this base. All orchestration logic lives here as async methods.
     """
+
+    _write_version = _shared("write_version")
+    _graph_dirty = _shared("graph_dirty")
+    _vector_index_ready = _shared("vector_index_ready")
+    _adds_since_compile = _shared("adds_since_compile")
+    _limit_warned_pct = _shared("limit_warned_pct")
+    _embedding_dims = _shared("embedding_dims")
 
     def __init__(
         self,
@@ -84,6 +114,8 @@ class _MemoryCore:
     ):
         import grafeo
 
+        self._shared = _SharedState()
+        self._tenant: str | None = None  # set on a for_user() view
         self._config = config or MemoryConfig()
         from grafeo_memory.providers.llm.retry import with_retries
 
@@ -173,6 +205,8 @@ class _MemoryCore:
         self._hub_cache: dict[str, tuple[tuple[int, float], set[str]]] = {}
         self._write_version = 0
         self._windows: dict[str, list[dict]] = {}
+        # start_session() registry: session id -> (bound user, or None while anonymous; last turn)
+        self._sessions: dict[str, tuple[str | None, float]] = {}
         self._summaries: dict[str, str] = {}
         self._adds_since_compile = 0
         self._concept_vectors: dict[str, list[float]] = {}
@@ -249,7 +283,10 @@ class _MemoryCore:
         The async runner is intentionally NOT closed here, it is shared across
         sessions and cleaned up automatically at process exit via atexit. Closing
         it per-session corrupts httpx/anyio transport state on Windows.
+        A ``for_user()`` view closes nothing: the manager it came from owns the database.
         """
+        if self._tenant is not None:  # only for_user() sets it
+            return
         if self._cache is not None:
             self._cache.close()  # the cache is ours even when the database is not
         if self._db_external:
@@ -274,14 +311,39 @@ class _MemoryCore:
 
     # Ownership and history helpers
 
+    def _uid(self, user_id: str | None) -> str:
+        """The user a call acts for: the argument, else the configured user. A ``for_user()`` view
+        refuses any other user."""
+        if user_id and self._tenant is not None and user_id != self._tenant:
+            raise ValueError(f"this manager view is bound to user {self._tenant!r}, not {user_id!r}")
+        return user_id or self._config.user_id
+
+    def for_user(self, user_id: str) -> Self:
+        """A view of this manager bound to one user.
+
+        The view shares the database, caches and session state, acts for ``user_id`` in every
+        call, refuses calls naming another user, and reaches only that user's memories, history
+        and open decisions by id. ``close()`` on a view leaves the database open. The host
+        application verifies who the user is; grafeo-memory trusts the id it is given.
+        """
+        if not user_id:
+            raise ValueError("for_user() needs a user_id")
+        if self._tenant is not None and user_id != self._tenant:
+            raise ValueError(f"this manager view is bound to user {self._tenant!r}, not {user_id!r}")
+        view = copy.copy(self)
+        view._config = copy.copy(self._config)
+        view._config.user_id = user_id
+        view._tenant = user_id
+        return view
+
     def _owned_memory(self, memory_id: str | int) -> tuple[int, dict] | None:
         """Return ``(node_id, properties)`` when ``memory_id`` names a Memory node in this manager's scope.
 
         Anything else (an invalid id, a missing node, a node of another label in
         a shared database, a memory of another ``graph_name``, ``agent_id`` or
         ``run_id`` scope) gives None, so the public API never modifies or deletes
-        nodes it does not own. ``user_id`` is not checked: it is a per-call
-        partition (``add(user_id=...)``), and one manager serves every user id.
+        nodes it does not own. ``user_id`` is checked on a ``for_user()`` view only; the
+        unbound manager treats it as a per-call partition and serves every user id.
         """
         try:
             node_id = int(memory_id)
@@ -295,6 +357,8 @@ class _MemoryCore:
             scope = getattr(self._config, key)
             if scope and props.get(key) != scope:
                 return None
+        if self._tenant is not None and props.get("user_id") != self._tenant:
+            return None
         return node_id, props
 
     def _record_history(self, memory_id: str | int, entry: HistoryEntry, user_id: str | None) -> None:
@@ -358,17 +422,28 @@ class _MemoryCore:
         infer: bool = True,
         importance: float = 1.0,
         memory_type: MemoryType | str = MemoryType.SEMANTIC,
+        speaker: str | None = None,
+        source: str = "chat",
         scopes: list[str] | None = None,
         _from_window: bool = False,
     ) -> AddResult:
+        if source not in SOURCES:
+            raise ValueError(f"source must be one of {SOURCES}, got {source!r}")
         on_usage, total = self._make_usage_collector()
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         sid = session_id or self._config.session_id
         now_ms = int(time.time() * 1000)
         mtype = MemoryType(memory_type) if isinstance(memory_type, str) else memory_type
 
         text, parsed, images = parse_messages(messages)
         actor_id, role = _extract_actor(parsed)
+
+        from grafeo_memory.services import tiers as _tiers
+
+        if not _from_window and _tiers.is_anonymous(self, sid):
+            # An anonymous session never writes long-term memory: its turns stay in its window.
+            _tiers.buffer_anonymous(self, sid, list(parsed))  # ty: ignore[invalid-argument-type]
+            return AddResult(usage=total)
 
         # Vision: convert images to text descriptions via LLM
         if images and self._config.enable_vision:
@@ -434,7 +509,8 @@ class _MemoryCore:
         extraction = await extract_async(
             self._model,
             text,
-            uid,
+            speaker,
+            source=source,
             custom_fact_prompt=custom_prompt,
             memory_type=mtype.value,
             _on_usage=on_usage,
@@ -500,6 +576,7 @@ class _MemoryCore:
                 park_floor=cfg.bucket.floor if bucket_on else None,
                 park_actions=tuple(cfg.bucket.park_actions),
             )
+            decisions = merge_duplicate_decisions(decisions)
             if cfg.policy_on:
                 from grafeo_memory.services import policy
 
@@ -603,6 +680,8 @@ class _MemoryCore:
         infer: bool = True,
         importance: float = 1.0,
         memory_type: MemoryType | str = MemoryType.SEMANTIC,
+        speaker: str | None = None,
+        source: str = "chat",
     ) -> AddResult:
         """Add multiple messages in batch.
 
@@ -610,7 +689,7 @@ class _MemoryCore:
         For infer=True: processes each message through the full extraction/reconciliation
         pipeline sequentially (reconciliation depends on prior state).
         """
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         sid = session_id or self._config.session_id
         now_ms = int(time.time() * 1000)
         mtype = MemoryType(memory_type) if isinstance(memory_type, str) else memory_type
@@ -641,6 +720,8 @@ class _MemoryCore:
                 infer=True,
                 importance=importance,
                 memory_type=mtype,
+                speaker=speaker,
+                source=source,
             )
             all_events.extend(result)
             combined_usage.incr(result.usage)
@@ -812,18 +893,10 @@ class _MemoryCore:
     ) -> SearchResponse:
         from grafeo_memory.core.temporal import detect_temporal_hints
 
-        self._recompute_graph_metrics()
-
-        # Deferred community materialization (requires async context for LLM calls)
-        if hasattr(self, "_pending_communities") and self._pending_communities:
-            from grafeo_memory.core.communities import materialize_communities_async
-
-            uid_for_communities = user_id or self._config.user_id
-            await materialize_communities_async(self._db, self._model, uid_for_communities, self._pending_communities)
-            self._pending_communities = None
-
+        # Graph metrics and community summaries are compile() work: search reads what the
+        # last compile stored and never recomputes them or calls the model for them.
         on_usage, total = self._make_usage_collector()
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         search_filters = self._build_filters(uid, filters)
 
         if memory_type is not None:
@@ -835,6 +908,9 @@ class _MemoryCore:
         if temporal_hints.include_expired and not include_expired:
             include_expired = True
         effective_k = k * 2 if temporal_hints.expand_limit else k
+        # A point-in-time query asks about facts that may have ended since, so it reaches
+        # superseded memories too; _valid_at_point keeps only the ones valid at that moment.
+        keep_expired = include_expired or point_in_time is not None
 
         # Embed query once, share across both search paths
         query_embedding = _as_vector(self._embedder.embed([query])[0])
@@ -858,6 +934,7 @@ class _MemoryCore:
                 vector_property=self._config.vector_property,
                 query_embedding=query_embedding,
                 lambda_mult=self._config.mmr_lambda,
+                include_expired=keep_expired,
             )
         else:
             vector_results = hybrid_search(
@@ -871,6 +948,7 @@ class _MemoryCore:
                 text_property=self._config.text_property,
                 rrf_k=self._config.hybrid_rrf_k,
                 query_embedding=query_embedding,
+                include_expired=keep_expired,
             )
 
         if _trace is not None:
@@ -886,14 +964,21 @@ class _MemoryCore:
 
         # Extract entities asynchronously to avoid nested run_sync() deadlock
         # when graph_search is called from within this async context.
-        from grafeo_memory.common.types import Fact
-        from grafeo_memory.core.extraction.entities import extract_entities_async
+        from grafeo_memory.common.types import Entity, Fact
 
-        try:
-            entities, _ = await extract_entities_async(self._model, [Fact(text=query)], uid, _on_usage=on_usage)
-        except Exception:
-            logger.warning("_search: entity extraction failed for query=%r", query, exc_info=True)
-            entities = []
+        if self._config.retrieval.query_entities == "lexical":
+            from grafeo_memory.services import retrieval
+
+            # names and merged aliases already in the store, whole words only: no model call
+            entities = [Entity(name=n, entity_type="") for n in retrieval.query_entities(self, uid, query, [])]
+        else:
+            from grafeo_memory.core.extraction.entities import extract_entities_async
+
+            try:
+                entities, _ = await extract_entities_async(self._model, [Fact(text=query)], _on_usage=on_usage)
+            except Exception:
+                logger.warning("_search: entity extraction failed for query=%r", query, exc_info=True)
+                entities = []
 
         if _trace is not None:
             _trace.append(
@@ -916,6 +1001,7 @@ class _MemoryCore:
             query_embedding=query_embedding,
             search_depth=self._config.graph_search_depth,
             graph_name=self._config.graph_name,
+            include_expired=keep_expired,
         )
 
         # Post-hoc filter graph results by memory_type if specified
@@ -971,7 +1057,7 @@ class _MemoryCore:
             )
 
         # Temporal filtering: exclude expired and apply time range
-        if not include_expired:
+        if not keep_expired:
             final = [r for r in final if r.expired_at is None]
         if time_after is not None:
             final = [r for r in final if r.created_at is not None and r.created_at >= time_after]
@@ -1012,11 +1098,13 @@ class _MemoryCore:
                 final,
                 [e.name for e in entities],
                 query_embedding,
-                include_expired,
+                keep_expired,
                 subjects,
                 scopes,
                 _trace,
             )
+            if point_in_time is not None:  # memories the layer pass pulled in meet the same moment
+                final = [r for r in final if _valid_at_point(r, point_in_time)]
 
         # Topology boost: lightweight structural re-ranking (no LLM call)
         if self._config.enable_topology_boost:
@@ -1320,6 +1408,7 @@ class _MemoryCore:
         bucket_on = self._config.bucket_on
         closing = self._config.ontology.interval_closing
         slots = _fact_slots(decisions, [f.text for f in extraction.facts])
+        consumed_targets: set[str] = set()
 
         def fact_embedding(i: int, text: str) -> list[float] | None:
             j = slots[i]
@@ -1347,7 +1436,22 @@ class _MemoryCore:
                 )
                 decision = replace(decision, target_memory_id=None)
 
-            if decision.parked and bucket_on and decision.action != MemoryAction.ADD:
+            # One add() can carry several decisions for the same memory ("I left Acme and joined
+            # Beta" -> two UPDATE decisions for "works at Acme"). The first supersedes it; a later UPDATE of
+            # the now-expired memory becomes an ADD, and a later DELETE has nothing left to do.
+            # A parked decision supersedes nothing, so it consumes no target.
+            parks = decision.parked and bucket_on and decision.action != MemoryAction.ADD
+            if (
+                not parks
+                and decision.target_memory_id
+                and decision.action in (MemoryAction.UPDATE, MemoryAction.DELETE)
+            ):
+                if str(decision.target_memory_id) in consumed_targets:
+                    decision = replace(decision, target_memory_id=None)
+                else:
+                    consumed_targets.add(str(decision.target_memory_id))
+
+            if parks:
                 events.append(
                     self._park_fact(
                         decision,
@@ -1731,6 +1835,12 @@ class _MemoryCore:
         self._db.set_node_property(node_id, "expired_at", timestamp)
         if (self._config.bitemporal_on or self._config.ontology.interval_closing) and invalid_at is not None:
             self._db.set_node_property(node_id, "invalid_at", invalid_at)
+            valid_at = props.get("valid_at")
+            if valid_at is not None and int(valid_at) > invalid_at:
+                # The new fact starts before this one's recorded start (often an undated fact
+                # stamped with the day it was learned): the start is unknown, not inverted.
+                with contextlib.suppress(Exception):
+                    self._db.remove_node_property(node_id, "valid_at")
         return old_text
 
     def _inherit_entity_edges(self, old_memory_id: str, new_memory_id: str) -> None:
@@ -1899,7 +2009,7 @@ class _MemoryCore:
         limit: int = 50,
     ) -> list[EpisodeResult]:
         """Retrieve episode nodes."""
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         try:
             nodes = self._db.get_nodes_by_label(EPISODE_LABEL)
         except Exception:
@@ -1957,6 +2067,8 @@ class _MemoryCore:
         try:
             mid = int(memory_id)
         except ValueError:
+            return []
+        if self._tenant is not None and self._owned_memory(mid) is None:
             return []
 
         try:
@@ -2077,6 +2189,10 @@ class _MemoryCore:
             List of dicts with memory_id, text, created_at, session_id.
         """
         mid = int(memory_id)
+        if self._tenant is not None:
+            if self._owned_memory(mid) is None:
+                return []
+            user_id = self._uid(user_id)
         user_filter = " AND rest.user_id = $uid" if user_id else ""
         graph_filter = " AND rest.graph_name = $gn" if self._config.graph_name else ""
         params: dict = {"mid": mid}
@@ -2168,24 +2284,25 @@ class _MemoryCore:
             groups[sid].sort(key=lambda r: getattr(r, "created_at", 0) or 0)
         return dict(groups)
 
-    def _recompute_graph_metrics(self) -> None:
-        """Recompute graph algorithm scores and cache as node properties.
+    def _recompute_graph_metrics(self) -> dict | None:
+        """Recompute graph algorithm scores and cache as node properties (a compile step).
 
         Runs pagerank, betweenness centrality, and louvain community detection.
         Results are stored as node properties for fast access during search scoring.
         Only runs when enable_graph_algorithms is True and the graph has changed.
+        Returns the louvain result when community summaries should be materialized.
 
         Only Memory and Entity nodes are updated. Algorithm computation may span
         the full graph (GrafeoDB API limitation), so scores can be influenced by
         non-memory topology when using a shared database.
         """
         if not self._config.enable_graph_algorithms or not self._graph_dirty:
-            return
+            return None
         self._graph_dirty = False
 
         if not hasattr(self._db, "algorithms"):
             logger.debug("Graph algorithms not available on this db instance")
-            return
+            return None
 
         # Collect IDs of nodes we own so we only write to Memory/Entity nodes.
         owned_ids: set[int] = set()
@@ -2194,9 +2311,10 @@ class _MemoryCore:
         for node_id, _ in self._db.get_nodes_by_label(ENTITY_LABEL):
             owned_ids.add(node_id)
         if not owned_ids:
-            return
+            return None
 
         algos = self._db.algorithms
+        pending: dict | None = None
 
         try:
             ranks = algos.pagerank(0.85, 100, 1e-6)  # ty: ignore[missing-attribute]
@@ -2223,11 +2341,11 @@ class _MemoryCore:
                 if node_id in owned_ids:
                     with contextlib.suppress(Exception):
                         self._db.set_node_property(node_id, "_community", community_id)
-            # Store louvain result for deferred community materialization
             if self._config.enable_community_summaries and communities:
-                self._pending_communities = result
+                pending = result
         except Exception:
             logger.debug("louvain community detection failed", exc_info=True)
+        return pending
 
     async def _store_graph(
         self,
@@ -2475,11 +2593,16 @@ class _MemoryCore:
                 if isinstance(row, dict):
                     vals = list(row.values())
                     if vals:
-                        return int(vals[0])
+                        found = int(vals[0])
+                        if entity.display_name and not _get_props(self._db.get_node(found)).get("display_name"):
+                            self._db.set_node_property(found, "display_name", entity.display_name)
+                        return found
         except Exception:
             logger.warning("_find_or_create_entity: lookup failed for %r", entity.name, exc_info=True)
 
         entity_props: dict = {"name": entity.name, "entity_type": entity.entity_type, "user_id": user_id}
+        if entity.display_name:
+            entity_props["display_name"] = entity.display_name  # as written; name stays the key
         if self._config.graph_name:
             entity_props["graph_name"] = self._config.graph_name
         node = self._db.create_node([ENTITY_LABEL], entity_props)
@@ -2549,7 +2672,7 @@ class _MemoryCore:
         include_expired: bool = False,
     ) -> list[SearchResult]:
         """Shared get_all implementation."""
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
 
         try:
             nodes = self._db.get_nodes_by_label(MEMORY_LABEL)
@@ -2626,7 +2749,7 @@ class _MemoryCore:
         from grafeo_memory.core.prompts import SUMMARIZE_SYSTEM, SUMMARIZE_USER
 
         on_usage, total = self._make_usage_collector()
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         now_ms = int(time.time() * 1000)
 
         memory_data = self._get_memories_with_timestamps(uid)
@@ -2696,12 +2819,26 @@ class _MemoryCore:
         except ValueError:
             return []
 
-        return get_history(self._db, node_id, graph_name=self._config.graph_name)
+        if self._tenant is None:
+            return get_history(self._db, node_id, graph_name=self._config.graph_name)
+        node = self._db.get_node(node_id)
+        if node is not None:
+            # the memory still exists: its whole history if it is the view's (legacy entries included)
+            if self._owned_memory(node_id) is None:
+                return []
+            return get_history(self._db, node_id, graph_name=self._config.graph_name)
+        # deleted with its node: only entries recorded for the view's user
+        return get_history(self._db, node_id, graph_name=self._config.graph_name, user_id=self._tenant)
 
     # --- Time travel (grafeo 0.6.2 history retention) ---
 
+    def _not_in_a_view(self, what: str) -> None:
+        if self._tenant is not None:
+            raise ValueError(f"{what} reads the whole database: call it on the manager, not a for_user() view")
+
     def _as_of_impl(self, point: int | datetime | timedelta):
         """A read-only view of the database as it was at *point*."""
+        self._not_in_a_view("as_of()")
         as_of = getattr(self._db, "as_of", None)
         if not callable(as_of):
             raise TypeError("time travel needs grafeo >= 0.6.2: the database passed with db= has no as_of()")
@@ -2711,6 +2848,7 @@ class _MemoryCore:
         self, query: str, point: int | datetime | timedelta, params: dict | None = None
     ) -> list[dict]:
         """Run one read-only GQL query as the database was at *point*."""
+        self._not_in_a_view("execute_as_of()")
         execute_as_of = getattr(self._db, "execute_as_of", None)
         if not callable(execute_as_of):
             raise TypeError("time travel needs grafeo >= 0.6.2: the database passed with db= has no execute_as_of()")
@@ -2722,11 +2860,17 @@ class _MemoryCore:
             node_id = int(memory_id)
         except ValueError:
             return None
-        with self._as_of_impl(point) as view:
+        as_of = getattr(self._db, "as_of", None)
+        if not callable(as_of):
+            raise TypeError("time travel needs grafeo >= 0.6.2: the database passed with db= has no as_of()")
+        with as_of(point) as view:
             node = view.get_node(node_id)
         if node is None:
             return None
-        return {"node_id": node.id, "labels": list(node.labels), "properties": node.properties()}
+        props = node.properties()
+        if self._tenant is not None and props.get("user_id") != self._tenant:
+            return None
+        return {"node_id": node.id, "labels": list(node.labels), "properties": props}
 
     def _check_db_memory_limit(self) -> None:
         """Warn once when engine memory usage crosses 95% of the configured limit.
@@ -2835,6 +2979,26 @@ class _MemoryCore:
                 logger.warning("compile: bucket sweep failed", exc_info=True)
         self._write_version += 1
         self._graph_dirty = True
+        # Graph metrics last, over the merged graph; then the LLM community summaries.
+        communities = self._recompute_graph_metrics()
+        if communities:
+            from grafeo_memory.core.communities import materialize_communities_async
+
+            gn = cfg.graph_name
+            users = (
+                {self._tenant}
+                if self._tenant is not None
+                else {
+                    str(p["user_id"])
+                    for _id, p in self._db.get_nodes_by_label(ENTITY_LABEL)
+                    if p.get("user_id") and (not gn or p.get("graph_name") == gn)
+                }
+            )
+            for user in sorted(users):
+                try:
+                    await materialize_communities_async(self._db, self._model, user, communities, _on_usage=on_usage)
+                except Exception:
+                    logger.warning("compile: community summaries failed for one user", exc_info=True)
         return res
 
     def _stats_impl(self) -> MemoryStats:
@@ -2942,6 +3106,7 @@ class _MemoryCore:
 
                 layers["bucket"] = bucket.stats(self, self._config.user_id)
         return MemoryStats(
+            prompts_version=PROMPTS_VERSION,
             total_memories=total,
             semantic_count=semantic,
             procedural_count=procedural,
@@ -3032,13 +3197,16 @@ def _as_vector(embedding: Iterable[float]) -> list[float]:
 def _valid_at_point(result: SearchResult, pit: int) -> bool:
     """Check whether a memory was valid at a given point in time.
 
-    Permissive: memories with no valid_at are always included (backward compat).
+    Permissive: a current memory with no valid_at is always included (backward compat).
+    An expired memory counts only when it records when it stopped being true
+    (``invalid_at``): one retracted by DELETE, or superseded without a stated end, was
+    never shown to be valid at any given point.
     """
-    if result.valid_at is None:
-        return True
-    if result.valid_at > pit:
+    if result.expired_at is not None and result.invalid_at is None:
         return False
-    return result.invalid_at is None or result.invalid_at > pit
+    if result.invalid_at is not None and result.invalid_at <= pit:
+        return False
+    return result.valid_at is None or result.valid_at <= pit
 
 
 def _extract_actor(parsed: list[Message]) -> tuple[str | None, str | None]:
@@ -3087,6 +3255,8 @@ class MemoryManager(_MemoryCore):
         infer: bool = True,
         importance: float = 1.0,
         memory_type: MemoryType | str = MemoryType.SEMANTIC,
+        speaker: str | None = None,
+        source: str = "chat",
         scopes: list[str] | None = None,
     ) -> AddResult:
         """Extract facts from text and store them as memories.
@@ -3099,6 +3269,8 @@ class MemoryManager(_MemoryCore):
             infer: If False, store text directly without LLM extraction/reconciliation.
             importance: Base importance score (0.0-1.0) when enable_importance is True.
             memory_type: Type of memory, "semantic" (facts) or "procedural" (instructions/preferences).
+            speaker: Who is talking, named in the facts (default: message names, else "the user").
+            source: "chat" (default) or "notes" for notes and documents, which have no speaker.
         """
         return run_sync(
             self._add(
@@ -3109,6 +3281,8 @@ class MemoryManager(_MemoryCore):
                 infer=infer,
                 importance=importance,
                 memory_type=memory_type,
+                speaker=speaker,
+                source=source,
                 scopes=scopes,
             )
         )
@@ -3123,6 +3297,8 @@ class MemoryManager(_MemoryCore):
         infer: bool = True,
         importance: float = 1.0,
         memory_type: MemoryType | str = MemoryType.SEMANTIC,
+        speaker: str | None = None,
+        source: str = "chat",
     ) -> AddResult:
         """Add multiple messages in batch.
 
@@ -3138,6 +3314,8 @@ class MemoryManager(_MemoryCore):
                 infer=infer,
                 importance=importance,
                 memory_type=memory_type,
+                speaker=speaker,
+                source=source,
             )
         )
 
@@ -3342,7 +3520,7 @@ class MemoryManager(_MemoryCore):
         """Get all detected communities and their summaries."""
         from grafeo_memory.core.communities import get_communities as _get_communities
 
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         return _get_communities(self._db, uid)
 
     def stats(self) -> MemoryStats:
@@ -3372,22 +3550,35 @@ class MemoryManager(_MemoryCore):
         instructions, facts and events within ``budget`` tokens, with provenance."""
         from grafeo_memory.services import tiers
 
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         return run_sync(tiers.assemble(self, query, uid, session_id or self._config.session_id, budget, k))
+
+    def start_session(self, session_id: str | None = None, *, anonymous: bool = False) -> str:
+        """Start a session and return its id (a new uuid when ``session_id`` is None).
+
+        ``anonymous=True``: the session only buffers its turns in memory; ``add(session_id=...)``
+        never writes long-term memory, ``assemble()`` returns the window alone, ``end_session()``
+        discards it, and it expires ``tiers.working.session_ttl`` seconds after its last turn.
+        Otherwise the session belongs to this manager's user (use ``for_user()``); starting an
+        anonymous session this way binds it to that user, one way, and stores its turns.
+        """
+        from grafeo_memory.services import tiers
+
+        return run_sync(tiers.start_session(self, self._uid(None), session_id, anonymous))
 
     def end_session(self, session_id: str | None = None, *, user_id: str | None = None) -> AddResult:
         """Layer A: promote the session window into long-term memory (extraction when
         ``defer_extraction``) and store its summary as an episodic memory."""
         from grafeo_memory.services import tiers
 
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         return run_sync(tiers.end_session(self, uid, session_id or self._config.session_id))
 
     def add_instruction(self, text: str, *, user_id: str | None = None) -> MemoryEvent:
         """Layer A: store a standing instruction as a certified procedural memory."""
         from grafeo_memory.services import tiers
 
-        return run_sync(tiers.add_instruction(self, text, user_id or self._config.user_id))
+        return run_sync(tiers.add_instruction(self, text, self._uid(user_id)))
 
     def certify(self, memory_id: str, certified: bool = True) -> bool:
         """Layer E: mark a memory certified (user-confirmed), or back to inferred."""
@@ -3400,7 +3591,7 @@ class MemoryManager(_MemoryCore):
         floor and marks them asked (for an app that relays them to the user)."""
         from grafeo_memory.services import bucket
 
-        return bucket.list_decisions(self, user_id or self._config.user_id, status, kind, ask)
+        return bucket.list_decisions(self, self._uid(user_id), status, kind, ask)
 
     def resolve_open_decision(self, decision_id: str, answer: str) -> bool:
         """Layer G: answer a parked question; the answer is written back as ground truth."""
@@ -3410,7 +3601,7 @@ class MemoryManager(_MemoryCore):
         """Layer B: the subject tree (roots, generated children) and active instance scopes."""
         from grafeo_memory.services import scoping
 
-        return scoping.scopes(self, user_id or self._config.user_id)
+        return scoping.scopes(self, self._uid(user_id))
 
     def set_root_scheme(
         self,
@@ -3424,9 +3615,7 @@ class MemoryManager(_MemoryCore):
         """Layer B: add, rename, retire or harden subject roots (versioned; retiring never deletes)."""
         from grafeo_memory.services import scoping
 
-        return scoping.set_root_scheme(
-            self, user_id or self._config.user_id, add=add, rename=rename, retire=retire, hard=hard
-        )
+        return scoping.set_root_scheme(self, self._uid(user_id), add=add, rename=rename, retire=retire, hard=hard)
 
     def explain(
         self,
@@ -3493,6 +3682,8 @@ class AsyncMemoryManager(_MemoryCore):
         infer: bool = True,
         importance: float = 1.0,
         memory_type: MemoryType | str = MemoryType.SEMANTIC,
+        speaker: str | None = None,
+        source: str = "chat",
         scopes: list[str] | None = None,
     ) -> AddResult:
         """Extract facts from text and store them as memories."""
@@ -3504,6 +3695,8 @@ class AsyncMemoryManager(_MemoryCore):
             infer=infer,
             importance=importance,
             memory_type=memory_type,
+            speaker=speaker,
+            source=source,
             scopes=scopes,
         )
 
@@ -3517,6 +3710,8 @@ class AsyncMemoryManager(_MemoryCore):
         infer: bool = True,
         importance: float = 1.0,
         memory_type: MemoryType | str = MemoryType.SEMANTIC,
+        speaker: str | None = None,
+        source: str = "chat",
     ) -> AddResult:
         """Add multiple messages in batch."""
         return await self._add_batch(
@@ -3527,6 +3722,8 @@ class AsyncMemoryManager(_MemoryCore):
             infer=infer,
             importance=importance,
             memory_type=memory_type,
+            speaker=speaker,
+            source=source,
         )
 
     @overload
@@ -3689,7 +3886,7 @@ class AsyncMemoryManager(_MemoryCore):
         """Get all detected communities and their summaries."""
         from grafeo_memory.core.communities import get_communities as _get_communities
 
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         return _get_communities(self._db, uid)
 
     def stats(self) -> MemoryStats:
@@ -3719,22 +3916,28 @@ class AsyncMemoryManager(_MemoryCore):
         instructions, facts and events within ``budget`` tokens, with provenance."""
         from grafeo_memory.services import tiers
 
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         return await tiers.assemble(self, query, uid, session_id or self._config.session_id, budget, k)
+
+    async def start_session(self, session_id: str | None = None, *, anonymous: bool = False) -> str:
+        """Start a session and return its id; see ``MemoryManager.start_session``."""
+        from grafeo_memory.services import tiers
+
+        return await tiers.start_session(self, self._uid(None), session_id, anonymous)
 
     async def end_session(self, session_id: str | None = None, *, user_id: str | None = None) -> AddResult:
         """Layer A: promote the session window into long-term memory (extraction when
         ``defer_extraction``) and store its summary as an episodic memory."""
         from grafeo_memory.services import tiers
 
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         return await tiers.end_session(self, uid, session_id or self._config.session_id)
 
     async def add_instruction(self, text: str, *, user_id: str | None = None) -> MemoryEvent:
         """Layer A: store a standing instruction as a certified procedural memory."""
         from grafeo_memory.services import tiers
 
-        return await tiers.add_instruction(self, text, user_id or self._config.user_id)
+        return await tiers.add_instruction(self, text, self._uid(user_id))
 
     def certify(self, memory_id: str, certified: bool = True) -> bool:
         """Layer E: mark a memory certified (user-confirmed), or back to inferred."""
@@ -3747,7 +3950,7 @@ class AsyncMemoryManager(_MemoryCore):
         floor and marks them asked (for an app that relays them to the user)."""
         from grafeo_memory.services import bucket
 
-        return bucket.list_decisions(self, user_id or self._config.user_id, status, kind, ask)
+        return bucket.list_decisions(self, self._uid(user_id), status, kind, ask)
 
     def resolve_open_decision(self, decision_id: str, answer: str) -> bool:
         """Layer G: answer a parked question; the answer is written back as ground truth."""
@@ -3757,7 +3960,7 @@ class AsyncMemoryManager(_MemoryCore):
         """Layer B: the subject tree (roots, generated children) and active instance scopes."""
         from grafeo_memory.services import scoping
 
-        return scoping.scopes(self, user_id or self._config.user_id)
+        return scoping.scopes(self, self._uid(user_id))
 
     def set_root_scheme(
         self,
@@ -3771,9 +3974,7 @@ class AsyncMemoryManager(_MemoryCore):
         """Layer B: add, rename, retire or harden subject roots (versioned; retiring never deletes)."""
         from grafeo_memory.services import scoping
 
-        return scoping.set_root_scheme(
-            self, user_id or self._config.user_id, add=add, rename=rename, retire=retire, hard=hard
-        )
+        return scoping.set_root_scheme(self, self._uid(user_id), add=add, rename=rename, retire=retire, hard=hard)
 
     async def explain(
         self,

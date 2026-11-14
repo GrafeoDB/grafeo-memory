@@ -228,7 +228,8 @@ class TestReconciliationTargetsAreCandidates:
         manager = _make_manager(
             [
                 {"facts": ["alice likes climbing"], "entities": [], "relations": []},
-                {"decisions": [{"action": "update", "text": "alice likes climbing", "target_memory_id": own_id}]},
+                # own_id is the only candidate for this user, shown to the model as "m1"
+                {"decisions": [{"action": "update", "text": "alice likes climbing", "target_memory_id": "m1"}]},
             ],
             db=db,
             reconciliation_threshold=0.0,
@@ -327,13 +328,15 @@ class TestDeleteAllIncludesExpired:
         second = _make_manager(
             [
                 {"facts": ["alice works at globex"], "entities": [], "relations": []},
-                {"decisions": [{"action": "update", "text": "alice works at globex", "target_memory_id": old_id}]},
+                # old_id is the only candidate, shown to the model as "m1"
+                {"decisions": [{"action": "update", "text": "alice works at globex", "target_memory_id": "m1"}]},
             ],
             db=db,
             reconciliation_threshold=0.0,
         )
-        second.add("Alice works at Globex")
+        assert [e.action for e in second.add("Alice works at Globex")] == [MemoryAction.UPDATE]
         assert len(second.get_all(include_expired=True)) == 2
+        assert old_id not in {m.memory_id for m in second.get_all()}  # superseded, not just alongside
 
         assert second.delete_all() == 2
 
@@ -441,3 +444,32 @@ class TestHybridSearchScopedInEngine:
 
         assert [r.memory_id for r in results] == [mine]
         manager.close()
+
+
+class TestDuplicateDecisionsInOneAdd:
+    """An UPDATE plus an ADD of the same text in one add() stored the fact twice."""
+
+    def test_update_and_add_of_the_same_text_store_it_once(self):
+        db = grafeo.GrafeoDB()
+        first = _make_manager([{"facts": ["pied piper is in the incubator"], "entities": [], "relations": []}], db=db)
+        old_id = first.add("Pied Piper is in the incubator.")[0].memory_id
+
+        moved = "pied piper moved into its own office in mountain view"
+        second = _make_manager(
+            [
+                {"facts": [moved], "entities": [], "relations": []},
+                {
+                    "decisions": [
+                        {"action": "update", "text": moved, "target_memory_id": "m1"},  # old_id, the only candidate
+                        {"action": "add", "text": moved},
+                    ]
+                },
+            ],
+            db=db,
+            reconciliation_threshold=0.0,
+        )
+        events = second.add("Pied Piper moved into its own office in Mountain View.")
+
+        assert [e.action for e in events] == [MemoryAction.UPDATE]
+        assert events[0].memory_id != old_id  # the update superseded old_id
+        assert [m.text for m in second.get_all()] == [moved]

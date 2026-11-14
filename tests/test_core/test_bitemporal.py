@@ -62,7 +62,7 @@ class TestParseDateToEpochMs:
     def test_empty_string_returns_none(self):
         assert _parse_date_to_epoch_ms("") is None
 
-    def test_unparseable_returns_none(self):
+    def test_unparsable_returns_none(self):
         assert _parse_date_to_epoch_ms("not a date") is None
 
     def test_whitespace_stripped(self):
@@ -127,7 +127,7 @@ class TestBiTemporalAdd:
         march_1 = int(datetime(2024, 3, 1, tzinfo=UTC).timestamp() * 1000)
 
         # We need a two-phase setup: first add creates the memory, then we
-        # build a second manager whose reconciliation mock references the real ID.
+        # build a second manager whose reconciliation mock updates it.
         import grafeo
 
         db = grafeo.GrafeoDB()
@@ -146,7 +146,8 @@ class TestBiTemporalAdd:
         old_memory_id = events1[0].memory_id
         manager1.close()
 
-        # Second add targets the real memory ID so UPDATE path executes.
+        # Second add targets the only candidate, shown to the model as alias "m1",
+        # so the UPDATE path executes against the real memory.
         # reconciliation_threshold=0.0 ensures search_similar finds the first memory,
         # so the reconciliation LLM mock is used instead of the fast-path ADD.
         manager2 = _make_manager(
@@ -155,7 +156,7 @@ class TestBiTemporalAdd:
                 _temporal_annotation_output([{"fact_index": 0, "valid_at": "2024-03-01", "invalid_at": None}]),
                 {
                     "decisions": [
-                        {"action": "update", "text": "alice now works at globex", "target_memory_id": old_memory_id},
+                        {"action": "update", "text": "alice now works at globex", "target_memory_id": "m1"},
                     ]
                 },
             ],
@@ -374,3 +375,77 @@ class TestAnnotateTemporalAsync:
         valid_ms, invalid_ms = result[0]
         assert valid_ms is not None
         assert invalid_ms is None
+
+
+# ---------------------------------------------------------------------------
+# Superseded memories on the read path (grafeo.ai hero recording)
+# ---------------------------------------------------------------------------
+
+
+class TestExpiredOnReadPath:
+    JAN = int(datetime(2014, 1, 1, tzinfo=UTC).timestamp() * 1000)
+    SEP = int(datetime(2014, 9, 1, tzinfo=UTC).timestamp() * 1000)
+    JUN = int(datetime(2014, 6, 1, tzinfo=UTC).timestamp() * 1000)
+
+    def _manager(self, **kwargs):
+        from grafeo_memory.common.types import RetrievalConfig
+
+        config = MemoryConfig(
+            db_path=None,
+            user_id="test_user",
+            embedding_dimensions=16,
+            enable_bitemporal=True,
+            retrieval=RetrievalConfig(query_entities="lexical"),  # no model call per search
+            **kwargs,
+        )
+        return MemoryManager(make_test_model([]), config, embedder=MockEmbedder(16))
+
+    def _memory(self, manager, text, valid_at):
+        emb = MockEmbedder(16).embed([text])[0]
+        return manager._create_memory(text, emb, "test_user", None, None, valid_at, valid_at=valid_at)
+
+    def test_include_expired_returns_superseded_memories(self):
+        manager = self._manager()
+        old = self._memory(manager, "pied piper is based in palo alto", self.JAN)
+        new = self._memory(manager, "pied piper is based in mountain view", self.SEP)
+        manager._expire_memory(old, self.SEP, invalid_at=self.SEP)
+
+        for diverse in (False, True):
+            current = {r.memory_id for r in manager.search("pied piper based", diverse=diverse)}
+            everything = {
+                r.memory_id for r in manager.search("pied piper based", include_expired=True, diverse=diverse)
+            }
+            assert old not in current and new in current
+            assert {old, new} <= everything
+        manager.close()
+
+    def test_point_in_time_finds_a_fact_that_ended_since(self):
+        manager = self._manager()
+        old = self._memory(manager, "pied piper is based in palo alto", self.JAN)
+        new = self._memory(manager, "pied piper is based in mountain view", self.SEP)
+        manager._expire_memory(old, self.SEP, invalid_at=self.SEP)
+
+        before_move = {r.memory_id for r in manager.search("pied piper based", point_in_time=self.JUN)}
+        assert old in before_move and new not in before_move
+        manager.close()
+
+    def test_point_in_time_skips_a_retracted_memory(self):
+        manager = self._manager()
+        wrong = self._memory(manager, "pied piper is based in palo alto", self.JAN)
+        manager._expire_memory(wrong, self.SEP)  # DELETE: no invalid_at
+
+        assert wrong not in {r.memory_id for r in manager.search("pied piper based", point_in_time=self.JUN)}
+        assert wrong in {r.memory_id for r in manager.search("pied piper based", include_expired=True)}
+        manager.close()
+
+    def test_closing_before_the_start_leaves_the_start_unknown(self):
+        manager = self._manager()
+        learned = int(datetime(2026, 11, 14, tzinfo=UTC).timestamp() * 1000)  # undated fact, stamped today
+        old = self._memory(manager, "pied piper is in the hacker hostel incubator", learned)
+        manager._expire_memory(old, learned, invalid_at=self.SEP)
+
+        props = manager._db.get_node(int(old)).properties
+        props = props() if callable(props) else props
+        assert props.get("invalid_at") == self.SEP
+        assert props.get("valid_at") is None
+        manager.close()

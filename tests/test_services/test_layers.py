@@ -181,9 +181,8 @@ class TestPolicy:
         )
         first = m.add("a")[0]
         m.certify(first.memory_id)
-        q.outputs.append(
-            {"decisions": [{"action": "UPDATE", "text": "alice works at beta", "target_memory_id": first.memory_id}]}
-        )
+        # first is the only candidate, shown to the model as "m1"
+        q.outputs.append({"decisions": [{"action": "UPDATE", "text": "alice works at beta", "target_memory_id": "m1"}]})
         res = m.add("b")
         assert res[0].action == MemoryAction.ADD and res[0].rung == "rule:entrenchment.certified"
         assert len(m.get_all()) == 2
@@ -325,10 +324,11 @@ class TestScoping:
 
 class TestOntologyAndRetrieval:
     def test_rung4_asks_the_decision_model(self):
-        emb = VecEmbedder(table={"JS": [0.8, 0.6, 0.0, 0.0], "JavaScript": [1.0, 0.0, 0.0, 0.0]})
+        # Entity names are stored (and embedded) as keys: "JS" -> "js", "JavaScript" -> "javascript".
+        emb = VecEmbedder(table={"js": [0.8, 0.6, 0.0, 0.0], "javascript": [1.0, 0.0, 0.0, 0.0]})
 
         def handler(state, questions):
-            return [Decision(q.question_id, "JavaScript", 0.9, 0.9) for q in questions]
+            return [Decision(q.question_id, "javascript", 0.9, 0.9) for q in questions]
 
         q = QueueModel(
             [
@@ -350,8 +350,9 @@ class TestOntologyAndRetrieval:
         )
         m.add("a")
         m.add("b")
-        names = {r["name"] for r in m._db.execute("MATCH (e:Entity) RETURN e.name AS name")}
-        assert names == {"JavaScript"}
+        rows = list(m._db.execute("MATCH (e:Entity) RETURN e.name AS name, e.display_name AS display"))
+        assert [(r["name"], r["display"]) for r in rows] == [("javascript", "JavaScript")]
+        assert m._layer_counts.get("rung:ontology.rung4") == 1, "the merge came from rung 4"
 
     def test_interval_closing_on_update(self):
         q = QueueModel(
@@ -369,7 +370,8 @@ class TestOntologyAndRetrieval:
         q.outputs.append(
             {
                 "decisions": [
-                    {"action": "UPDATE", "text": "alice works at beta since 2021", "target_memory_id": first.memory_id}
+                    # first is the only candidate, shown to the model as "m1"
+                    {"action": "UPDATE", "text": "alice works at beta since 2021", "target_memory_id": "m1"}
                 ]
             }
         )
@@ -397,7 +399,33 @@ class TestOntologyAndRetrieval:
         m.certify(mem.memory_id)
         ex = m.explain("what about acme in 2023")
         step = next(s for s in ex.steps if s.name == "deterministic_first")
-        assert step.detail["entities"] == ["Acme"] and step.detail["memories"] == 1
+        assert step.detail["entities"] == ["acme"] and step.detail["memories"] == 1  # the stored key
+
+    @pytest.mark.parametrize(("mode", "model_calls"), [("lexical", 0), ("llm", 1)])
+    def test_query_entities_lexical_makes_no_model_call(self, mode, model_calls):
+        q = QueueModel(
+            [
+                _facts("alice works at acme", entities=[{"name": "Acme", "entity_type": "Organization"}]),
+                {"entities": [], "relations": []},
+            ]
+        )
+        m = MemoryManager(
+            q.model(),
+            MemoryConfig(user_id="u", embedding_dimensions=4, retrieval=RetrievalConfig(query_entities=mode)),
+            embedder=VecEmbedder(),
+        )
+        m.add("x")
+        before = q.calls
+        q.outputs.append({"entities": [{"name": "Acme", "entity_type": "Organization"}], "relations": []})
+        ex = m.explain("what does alice do at acme")
+        assert q.calls - before == model_calls
+        if mode == "lexical":
+            step = next(s for s in ex.steps if s.name == "entity_extraction")
+            assert step.detail["entities"] == ["acme"], "the stored entity key is found by name, whole word"
+
+    def test_query_entities_is_validated(self):
+        with pytest.raises(ValueError, match="query_entities"):
+            MemoryConfig(retrieval=RetrievalConfig(query_entities="maybe"))
 
     @staticmethod
     def _speaker_graph(m: MemoryManager, n_memories: int) -> None:

@@ -11,7 +11,7 @@ from pydantic_ai import Agent
 from grafeo_memory.common.schemas import EntitiesOutput
 from grafeo_memory.common.types import Entity, ExtractionResult, Fact, ModelType, Relation
 from grafeo_memory.core._compat import run_sync
-from grafeo_memory.core.prompts import ENTITY_EXTRACTION_SYSTEM, ENTITY_EXTRACTION_USER
+from grafeo_memory.core.prompts import ENTITY_EXTRACTION_SYSTEM, ENTITY_EXTRACTION_USER, speaker_line
 
 if TYPE_CHECKING:
     from pydantic_ai import AgentRunResult
@@ -19,23 +19,42 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_EDGE_PUNCT = " \t\n\"'`.,;:!?()[]{}"
+
+
+def entity_key(name: str) -> str:
+    """The stored key of an entity name: lowercase, whitespace runs to one underscore ("Acme Corp" ->
+    "acme_corp"). Other characters stay ("c++", "node.js"), so distinct names keep distinct keys.
+
+    Idempotent, and the form earlier versions asked the model for, so existing stores keep matching.
+    """
+    return "_".join(name.casefold().strip(_EDGE_PUNCT).split())
+
+
+def _entity(name: str, entity_type: str) -> Entity:
+    key = entity_key(name) or name.strip()
+    return Entity(name=key, entity_type=entity_type, display_name=name.strip() if name.strip() != key else None)
+
+
+def _relation(source: str, target: str, relation_type: str) -> Relation:
+    return Relation(
+        source=entity_key(source) or source, target=entity_key(target) or target, relation_type=relation_type
+    )
+
 
 def _make_agent(model: ModelType) -> Agent[object, EntitiesOutput]:
     return Agent(model, system_prompt=ENTITY_EXTRACTION_SYSTEM, output_type=EntitiesOutput)
 
 
 def _parse(result: AgentRunResult[EntitiesOutput]) -> tuple[list[Entity], list[Relation]]:
-    entities = [Entity(name=e.name, entity_type=e.entity_type) for e in result.output.entities]
-    relations = [
-        Relation(source=r.source, target=r.target, relation_type=r.relation_type) for r in result.output.relations
-    ]
+    entities = [_entity(e.name, e.entity_type) for e in result.output.entities]
+    relations = [_relation(r.source, r.target, r.relation_type) for r in result.output.relations]
     return entities, relations
 
 
 async def extract_entities_async(
     model: ModelType,
     facts: list[Fact],
-    user_id: str,
     *,
     _on_usage: Callable[[str, RunUsage], None] | None = None,
 ) -> tuple[list[Entity], list[Relation]]:
@@ -46,7 +65,7 @@ async def extract_entities_async(
     facts_text = "\n".join(f"- {f.text}" for f in facts)
     agent = _make_agent(model)
     try:
-        result = await agent.run(ENTITY_EXTRACTION_USER.format(user_id=user_id, facts=facts_text))
+        result = await agent.run(ENTITY_EXTRACTION_USER.format(facts=facts_text))
     except Exception:
         logger.warning("Entity extraction failed", exc_info=True)
         return [], []
@@ -58,19 +77,19 @@ async def extract_entities_async(
 def extract_entities(
     model: ModelType,
     facts: list[Fact],
-    user_id: str,
     *,
     _on_usage: Callable[[str, RunUsage], None] | None = None,
 ) -> tuple[list[Entity], list[Relation]]:
     """Extract entities and relations from facts via LLM (sync)."""
-    return run_sync(extract_entities_async(model, facts, user_id, _on_usage=_on_usage))
+    return run_sync(extract_entities_async(model, facts, _on_usage=_on_usage))
 
 
 async def _extract_combined_async(
     model: ModelType,
     text: str,
-    user_id: str,
+    speaker: str | None = None,
     *,
+    source: str = "chat",
     custom_prompt: str | None = None,
     _on_usage: Callable[[str, RunUsage], None] | None = None,
 ) -> ExtractionResult:
@@ -80,7 +99,7 @@ async def _extract_combined_async(
 
     agent = Agent(model, system_prompt=custom_prompt or COMBINED_EXTRACTION_SYSTEM, output_type=ExtractionOutput)
     try:
-        result = await agent.run(COMBINED_EXTRACTION_USER.format(user_id=user_id, text=text))
+        result = await agent.run(COMBINED_EXTRACTION_USER.format(speaker=speaker_line(speaker, source), text=text))
     except Exception:
         logger.debug("Combined extraction failed, falling back to separate calls", exc_info=True)
         return ExtractionResult()
@@ -88,16 +107,17 @@ async def _extract_combined_async(
         _on_usage("extract", result.usage)
     output: ExtractionOutput = result.output
     facts = [Fact(text=f) for f in output.facts if f]
-    entities = [Entity(name=e.name, entity_type=e.entity_type) for e in output.entities]
-    relations = [Relation(source=r.source, target=r.target, relation_type=r.relation_type) for r in output.relations]
+    entities = [_entity(e.name, e.entity_type) for e in output.entities]
+    relations = [_relation(r.source, r.target, r.relation_type) for r in output.relations]
     return ExtractionResult(facts=facts, entities=entities, relations=relations)
 
 
 async def extract_async(
     model: ModelType,
     text: str,
-    user_id: str,
+    speaker: str | None = None,
     *,
+    source: str = "chat",
     custom_fact_prompt: str | None = None,
     memory_type: str = "semantic",
     _on_usage: Callable[[str, RunUsage], None] | None = None,
@@ -116,7 +136,9 @@ async def extract_async(
 
         effective_prompt = COMBINED_EPISODIC_EXTRACTION_SYSTEM
 
-    result = await _extract_combined_async(model, text, user_id, custom_prompt=effective_prompt, _on_usage=_on_usage)
+    result = await _extract_combined_async(
+        model, text, speaker, source=source, custom_prompt=effective_prompt, _on_usage=_on_usage
+    )
     if result.facts:
         return result
 
@@ -124,19 +146,22 @@ async def extract_async(
     # Try separate fact extraction + entity extraction (2 simpler LLM calls).
     from grafeo_memory.core.extraction.facts import extract_facts_async
 
-    facts = await extract_facts_async(model, text, user_id, custom_prompt=effective_prompt, _on_usage=_on_usage)
+    facts = await extract_facts_async(
+        model, text, speaker, source=source, custom_prompt=effective_prompt, _on_usage=_on_usage
+    )
     if not facts:
         return ExtractionResult()
 
-    entities, relations = await extract_entities_async(model, facts, user_id, _on_usage=_on_usage)
+    entities, relations = await extract_entities_async(model, facts, _on_usage=_on_usage)
     return ExtractionResult(facts=facts, entities=entities, relations=relations)
 
 
 def extract(
     model: ModelType,
     text: str,
-    user_id: str,
+    speaker: str | None = None,
     *,
+    source: str = "chat",
     custom_fact_prompt: str | None = None,
     memory_type: str = "semantic",
     _on_usage: Callable[[str, RunUsage], None] | None = None,
@@ -144,6 +169,12 @@ def extract(
     """Run the full extraction pipeline (sync)."""
     return run_sync(
         extract_async(
-            model, text, user_id, custom_fact_prompt=custom_fact_prompt, memory_type=memory_type, _on_usage=_on_usage
+            model,
+            text,
+            speaker,
+            source=source,
+            custom_fact_prompt=custom_fact_prompt,
+            memory_type=memory_type,
+            _on_usage=_on_usage,
         )
     )

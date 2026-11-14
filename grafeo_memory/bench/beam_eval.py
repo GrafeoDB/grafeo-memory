@@ -285,7 +285,12 @@ async def run_all(args) -> None:
     selected = [rows[i] for i in conv_ids]
     run_dir = BEAM_RUNS / args.run
     run_dir.mkdir(parents=True, exist_ok=True)
-    json.dump(vars(args), open(run_dir / "args.json", "w"), indent=1, default=str)
+    from grafeo_memory.core.prompts import PROMPTS_VERSION
+
+    # runs on different prompt versions are never compared
+    json.dump(
+        {**vars(args), "prompts_version": PROMPTS_VERSION}, open(run_dir / "args.json", "w"), indent=1, default=str
+    )
     client = Mistral()
 
     cache = MemoryCache(

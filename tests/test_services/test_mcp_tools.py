@@ -25,8 +25,15 @@ class FakeAsyncManager:
     def __init__(self):
         self.calls: list[tuple[str, dict]] = []
 
+    _config = type("Config", (), {"user_id": "default"})()
+
+    def for_user(self, user_id):
+        self.bound_user = user_id
+        return self
+
     async def add(self, text, *, user_id=None, memory_type="semantic", infer=True, **kw):
         self.calls.append(("add", {"text": text, "user_id": user_id, "memory_type": memory_type, "infer": infer}))
+        self.add_kw = kw
         return [MemoryEvent(action=MemoryAction.ADD, memory_id="1", text=text, memory_type=memory_type)]
 
     async def add_batch(self, texts, *, user_id=None, memory_type="semantic", infer=True, **kw):
@@ -100,6 +107,15 @@ class TestMemoryAdd:
         call_name, call_args = mgr.calls[0]
         assert call_name == "add"
         assert call_args == {"text": "alice likes pizza", "user_id": None, "memory_type": "semantic", "infer": True}
+
+    def test_agent_writes_are_notes_by_default(self):
+        from grafeo_memory.mcp.tools import memory_add
+
+        ctx, mgr = _make_ctx()
+        asyncio.run(memory_add("the user prefers uv over pip", ctx=ctx))
+        assert mgr.add_kw == {"session_id": None, "speaker": None, "source": "notes"}
+        asyncio.run(memory_add("I prefer uv", speaker="Alice", source="chat", ctx=ctx))
+        assert mgr.add_kw == {"session_id": None, "speaker": "Alice", "source": "chat"}
 
     def test_with_user_and_type(self):
         from grafeo_memory.mcp.tools import memory_add

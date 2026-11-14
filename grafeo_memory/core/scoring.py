@@ -118,7 +118,7 @@ def apply_cross_session_boost(
 ) -> list[SearchResult]:
     """Boost scores using cached graph algorithm metrics (pagerank, betweenness).
 
-    Requires enable_graph_algorithms=True and _recompute_graph_metrics() to have run.
+    Requires enable_graph_algorithms=True and a compile() to have stored them.
     Uses pre-computed _pagerank and _betweenness node properties.
     """
     from grafeo_memory.core.search.vector import _get_props

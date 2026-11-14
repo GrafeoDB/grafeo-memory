@@ -205,6 +205,10 @@ class RetrievalConfig:
     # entities (ladder rungs 1-2) -> relation expansion -> memories of those entities,
     # boosted and filled in by vector similarity within that set.
     order: str = "vector"
+    # How search() finds the entities a query names, for graph search and deterministic order:
+    # "lexical" (default) matches whole-word entity names and merged aliases already in the
+    # store, with no model call; "llm" asks the model (one call per search).
+    query_entities: str = "lexical"
     expansion_depth: int = 1  # relation hops from the mentioned entities (0 = only them)
     deterministic_boost: float = 0.2  # score multiplier bonus for memories in the deterministic set
     deterministic_cap: int = 200  # max memories pulled from the deterministic set
@@ -377,6 +381,8 @@ class WorkingConfig:
     # True: add() only buffers the session and end_session() runs extraction once
     # over the window. False: add() extracts as today and the window is context only.
     defer_extraction: bool = False
+    # Seconds an anonymous session (start_session(anonymous=True)) is kept after its last turn.
+    session_ttl: float = 3600.0
 
 
 @dataclass
@@ -468,7 +474,8 @@ class MemoryConfig:
     mmr_lambda: float = 0.5
     # Cross-session entity reinforcement boost factor
     cross_session_factor: float = 0.0
-    # Graph algorithm-based scoring (opt-in, replaces hand-coded topology)
+    # Graph algorithm-based scoring (opt-in, replaces hand-coded topology); compile() computes
+    # the metrics (call it, or set compilation.every_n_adds), search() only reads them
     enable_graph_algorithms: bool = False
     # Bi-temporal model: extract real-world validity times from facts (opt-in)
     enable_bitemporal: bool = False
@@ -481,7 +488,8 @@ class MemoryConfig:
     db_spill_limit_bytes: int | None = None
     # Episode provenance: store raw messages as Episode nodes with provenance edges (opt-in)
     enable_episodes: bool = False
-    # Community summaries: LLM-generated summaries for entity clusters (opt-in, requires enable_graph_algorithms)
+    # Community summaries: LLM-generated summaries for entity clusters, made by compile()
+    # (opt-in, requires enable_graph_algorithms)
     enable_community_summaries: bool = False
     # Time travel (grafeo 0.6.2 history retention): how far back the database keeps its
     # history for as_of reads: "off", "forever", a timedelta, or seconds as a number.
@@ -564,6 +572,10 @@ class MemoryConfig:
                 raise ValueError(f"policy.shape_severity values must be violation/warning/info, got {sev!r}")
         if self.retrieval.expansion_depth < 0:
             raise ValueError("retrieval.expansion_depth must be >= 0")
+        if self.retrieval.query_entities not in ("llm", "lexical"):
+            raise ValueError(
+                f"retrieval.query_entities must be 'llm' or 'lexical', got {self.retrieval.query_entities!r}"
+            )
         if not 0.0 < self.retrieval.hub_share <= 1.0:
             raise ValueError("retrieval.hub_share must be in (0, 1]")
         if self.compilation.every_n_adds < 0:
@@ -755,10 +767,14 @@ class Fact:
 
 @dataclass
 class Entity:
-    """An entity extracted from conversation text."""
+    """An entity extracted from conversation text.
+
+    ``name`` is the stored key ("acme_corp"); ``display_name`` the name as written ("Acme Corp").
+    """
 
     name: str
     entity_type: str
+    display_name: str | None = None
 
 
 @dataclass
@@ -833,6 +849,8 @@ class MemoryStats:
     # Layer metrics: open decisions by status/kind, resolution rungs (deterministic share),
     # certified/provisional counts. Empty when no layer is on.
     layers: dict = field(default_factory=dict)
+    # Version of the extraction and reconciliation prompts (core.prompts.PROMPTS_VERSION)
+    prompts_version: int = 0
 
 
 @dataclass

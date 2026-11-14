@@ -82,7 +82,8 @@ class TestHistoryOnEveryWritePath:
         second = _make_manager(
             [
                 {"facts": ["alice works at globex"], "entities": [ALICE], "relations": []},
-                {"decisions": [{"action": "update", "text": "alice works at globex", "target_memory_id": old_id}]},
+                # old_id is the only candidate, shown to the model as "m1"
+                {"decisions": [{"action": "update", "text": "alice works at globex", "target_memory_id": "m1"}]},
             ],
             db=db,
             reconciliation_threshold=0.0,
@@ -99,7 +100,8 @@ class TestHistoryOnEveryWritePath:
         third = _make_manager(
             [
                 {"facts": ["alice is unemployed"], "entities": [ALICE], "relations": []},
-                {"decisions": [{"action": "delete", "text": "", "target_memory_id": new_id}]},
+                # old_id is expired, so new_id is the only candidate: "m1"
+                {"decisions": [{"action": "delete", "text": "", "target_memory_id": "m1"}]},
             ],
             db=db,
             reconciliation_threshold=0.0,
@@ -137,7 +139,7 @@ class TestHistoryOnEveryWritePath:
         mid = manager.add("Alice likes tea")[0].memory_id
         for i in range(5):
             manager.update(mid, f"alice likes tea v{i}")
-        manager.search("tea")
+        manager.compile()  # compile computes the graph metrics
         props = manager._db.get_node(int(mid)).properties()
         # History nodes have no edges, so the memory is not a bridge to them.
         assert props["_betweenness"] == 0.0

@@ -1,5 +1,7 @@
 """Tests for the extraction pipeline."""
 
+from typing import ClassVar
+
 from mock_llm import make_error_model, make_test_model
 
 from grafeo_memory.common.types import Fact
@@ -45,7 +47,7 @@ def test_extract_entities():
         ]
     )
     facts = [Fact("alice works at acme corp")]
-    entities, relations = extract_entities(model, facts, "alice")
+    entities, relations = extract_entities(model, facts)
     assert len(entities) == 2
     assert entities[0].name == "alice"
     assert entities[1].entity_type == "organization"
@@ -55,7 +57,7 @@ def test_extract_entities():
 
 def test_extract_entities_empty_facts():
     model = make_test_model([])  # No responses needed, short-circuits
-    entities, relations = extract_entities(model, [], "alice")
+    entities, relations = extract_entities(model, [])
     assert entities == []
     assert relations == []
 
@@ -143,3 +145,81 @@ def test_mistral_fallback_no_stderr_traceback(capsys):
     captured = capsys.readouterr()
     assert "Traceback" not in captured.err
     assert "Error" not in captured.err
+
+
+def _capturing_model(output: dict, seen: list[str]):
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    def handler(messages, info):
+        seen.append(" ".join(str(getattr(p, "content", "")) for m in messages for p in m.parts))
+        return ModelResponse(parts=[ToolCallPart(tool_name=info.output_tools[0].name, args=output)])
+
+    return FunctionModel(function=handler)
+
+
+class TestIdentityInPrompts:
+    """The user_id is a tenancy key: it never reaches a prompt, and the speaker comes from the input."""
+
+    OUT: ClassVar[dict] = {"facts": ["the user likes hiking"], "entities": [], "relations": []}
+
+    def test_default_speaker_is_the_user(self):
+        seen: list[str] = []
+        extract(_capturing_model(self.OUT, seen), "I like hiking")
+        assert '"the user"' in seen[0]
+        assert "user_id" not in seen[0]
+
+    def test_labelled_turns_keep_their_speaker_names(self):
+        # LOCOMO turns read "Caroline (user): ..."; facts must say Caroline, not "the user".
+        seen: list[str] = []
+        extract(_capturing_model(self.OUT, seen), "Caroline (user): I went to a support group")
+        assert "Name a speaker by the name on their line" in seen[0]
+
+    def test_named_speaker(self):
+        seen: list[str] = []
+        extract(_capturing_model(self.OUT, seen), "I like hiking", "Caroline")
+        assert "The speaker is Caroline" in seen[0]
+
+    def test_notes_have_no_speaker(self):
+        seen: list[str] = []
+        extract(_capturing_model(self.OUT, seen), "grafeo commits need a signed tag", source="notes")
+        assert "notes or a document" in seen[0]
+        assert "the user" not in seen[0]
+
+    def test_query_entity_extraction_has_no_identity(self):
+        seen: list[str] = []
+        extract_entities(_capturing_model({"entities": [], "relations": []}, seen), [Fact("where is pied piper")])
+        assert "user_id" not in seen[0]
+
+
+class TestEntityKeys:
+    def test_names_as_written_become_keys_with_a_display_name(self):
+        model = make_test_model(
+            [
+                {
+                    "facts": ["Gavin Belson runs Hooli"],
+                    "entities": [
+                        {"name": "Gavin Belson", "entity_type": "person"},
+                        {"name": "hooli", "entity_type": "organization"},
+                    ],
+                    "relations": [{"source": "Gavin Belson", "target": "Hooli", "relation_type": "runs"}],
+                }
+            ]
+        )
+        result = extract(model, "Gavin Belson runs Hooli")
+        assert [(e.name, e.display_name) for e in result.entities] == [
+            ("gavin_belson", "Gavin Belson"),
+            ("hooli", None),
+        ]
+        assert (result.relations[0].source, result.relations[0].target) == ("gavin_belson", "hooli")
+
+    def test_entity_key_is_idempotent(self):
+        from grafeo_memory.core.extraction.entities import entity_key
+
+        assert entity_key("Acme Corp") == entity_key("acme_corp") == entity_key(" Acme  Corp. ") == "acme_corp"
+        assert entity_key(entity_key("Gavin Belson")) == "gavin_belson"
+
+    def test_distinct_names_keep_distinct_keys(self):
+        from grafeo_memory.core.extraction.entities import entity_key
+
+        assert len({entity_key(n) for n in ("C++", "C#", "C", "node.js", "AT&T")}) == 5

@@ -1,0 +1,3 @@
+# Words the typos hook must accept (https://github.com/crate-ci/typos)
+[default.extend-words]
+nin = "nin"  # the `$nin` (not in) search filter operator

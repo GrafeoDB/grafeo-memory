@@ -153,7 +153,7 @@ class TestTemporalPrecheckWiring:
                             "decisions": [
                                 {
                                     "action": "UPDATE",
-                                    "target_memory_id": "7",
+                                    "target_memory_id": "m1",  # alias of "7", the top-scored candidate
                                     "text": "Alice works at Beta since 2022-01-01.",
                                 }
                             ]
@@ -174,8 +174,9 @@ class TestTemporalPrecheckWiring:
         assert decisions[0].target_memory_id == "7"
         assert seen_prompts, "model should have been called once"
         prompt = seen_prompts[0]
-        assert "ID 7" in prompt  # contested candidate present
-        assert "ID 9" not in prompt  # cleared candidate filtered out
+        # Aliases come from the full candidate list (7 -> m1, 9 -> m2) before the pre-check.
+        assert "ID m1" in prompt  # contested candidate present
+        assert "ID m2" not in prompt  # cleared candidate filtered out
 
     def test_each_fact_sees_only_its_own_contested_candidates(self):
         from pydantic_ai.messages import ModelResponse, ToolCallPart
@@ -203,8 +204,9 @@ class TestTemporalPrecheckWiring:
         decisions = reconcile(FunctionModel(function=handler), facts, existing, temporal_precheck=True)
         assert len(decisions) == 2 and len(seen_prompts) == 2  # one call per distinct contested set
         by_fact = {("Beta" in p): p for p in seen_prompts}
-        assert "ID 7" in by_fact[True] and "ID 9" not in by_fact[True]
-        assert "ID 9" in by_fact[False] and "ID 7" not in by_fact[False]
+        # Each subset keeps the aliases of the full list: 7 -> m1, 9 -> m2.
+        assert "ID m1" in by_fact[True] and "ID m2" not in by_fact[True]
+        assert "ID m2" in by_fact[False] and "ID m1" not in by_fact[False]
 
     def test_off_by_default_preserves_baseline(self):
         from mock_llm import make_test_model

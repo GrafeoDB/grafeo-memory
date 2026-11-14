@@ -18,6 +18,7 @@ falls back to the LLM path, which itself falls back to ADD.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -73,6 +74,44 @@ def _parse(result: AgentRunResult[ReconciliationOutput]) -> list[ReconciliationD
             )
         )
     return decisions
+
+
+def _text_key(text: str) -> str:
+    return " ".join(text.casefold().split()).rstrip(".!")
+
+
+def merge_duplicate_decisions(decisions: list[ReconciliationDecision]) -> list[ReconciliationDecision]:
+    """Merge ADD and UPDATE decisions of one call that would store the same text.
+
+    An engine can answer one fact twice (an UPDATE plus an ADD of the same text, or two
+    identical UPDATE decisions), which stored the fact twice. Per text, the first UPDATE wins (else
+    the first ADD); a repeat with the same or no target becomes NONE, and an UPDATE of a
+    different memory becomes a DELETE of it, so that memory is superseded too. The list
+    keeps its length and order, because the executor matches decisions to facts by position.
+    """
+    from dataclasses import replace
+
+    winner: dict[str, int] = {}
+    for i, d in enumerate(decisions):
+        if d.action not in (MemoryAction.ADD, MemoryAction.UPDATE):
+            continue
+        key = _text_key(d.text)
+        j = winner.get(key)
+        if j is None or (decisions[j].action == MemoryAction.ADD and d.action == MemoryAction.UPDATE):
+            winner[key] = i
+    out = list(decisions)
+    for i, d in enumerate(decisions):
+        if d.action not in (MemoryAction.ADD, MemoryAction.UPDATE):
+            continue
+        j = winner[_text_key(d.text)]
+        if i == j:
+            continue
+        w = decisions[j]
+        if d.action == MemoryAction.UPDATE and d.target_memory_id and d.target_memory_id != w.target_memory_id:
+            out[i] = replace(d, action=MemoryAction.DELETE)
+        else:
+            out[i] = replace(d, action=MemoryAction.NONE, target_memory_id=None)
+    return out
 
 
 def _fast_path_add(new_facts: list[Fact]) -> list[ReconciliationDecision]:
@@ -214,7 +253,7 @@ async def _temporal_precheck(
             out[i] = ReconciliationDecision(action=MemoryAction.ADD, text=f.text, engine="temporal")
     extra: list[ReconciliationDecision] = []
     for contested, pending in groups.items():
-        sub = await reconcile_async(
+        sub = await _reconcile(
             model,
             [new_facts[i] for i in pending],
             [by_id[c] for c in contested],
@@ -284,11 +323,72 @@ async def reconcile_async(
             instead of being applied or escalated; the executor stores the fact
             provisionally and records an open decision. None = never park.
 
+    Candidates are shown to the engine as ``m1``..``mN`` (by score) and mapped back on
+    return, so ids never collide with numbers or slugs in the memory text. A target
+    outside that set comes back without a target (UPDATE becomes ADD, DELETE is skipped).
+
     Returns:
         A list of ReconciliationDecision objects. Each carries ``engine``
         ("llm"/"decision"/"fast"/"temporal") and ``confidence`` when the engine
         provides one.
     """
+    if not new_facts or not existing_memories:
+        return await _reconcile(
+            model,
+            new_facts,
+            existing_memories,
+            _on_usage=_on_usage,
+            engine=engine,
+            decision_model=decision_model,
+            stage=stage,
+            question_pack=question_pack,
+            temporal_precheck=temporal_precheck,
+            park_floor=park_floor,
+            park_actions=park_actions,
+        )
+    ranked = sorted(existing_memories, key=lambda m: -float(m.get("score", 0.0)))
+    real = {f"m{i + 1}": str(m["id"]) for i, m in enumerate(ranked)}
+    shown = [{**m, "id": alias} for alias, m in zip(real, ranked, strict=True)]
+    decisions = await _reconcile(
+        model,
+        new_facts,
+        shown,
+        _on_usage=_on_usage,
+        engine=engine,
+        decision_model=decision_model,
+        stage=stage,
+        question_pack=question_pack,
+        temporal_precheck=temporal_precheck,
+        park_floor=park_floor,
+        park_actions=park_actions,
+    )
+    return [_unalias(d, real) for d in decisions]
+
+
+def _unalias(d: ReconciliationDecision, real: dict[str, str]) -> ReconciliationDecision:
+    from dataclasses import replace
+
+    target = d.target_memory_id
+    if target is not None and str(target) not in real:
+        logger.warning("%s targets %r, which is not a candidate alias; ignoring the target", d.action.value, target)
+    alts = [re.sub(r"^(UPDATE|DELETE)_(m\d+)$", lambda x: f"{x[1]}_{real.get(x[2], x[2])}", a) for a in d.alternatives]
+    return replace(d, target_memory_id=real.get(str(target)) if target is not None else None, alternatives=alts)
+
+
+async def _reconcile(
+    model: ModelType,
+    new_facts: list[Fact],
+    existing_memories: list[dict],
+    *,
+    _on_usage: Callable[[str, RunUsage], None] | None = None,
+    engine: Engine | str = Engine.LLM,
+    decision_model: DecisionModel | None = None,
+    stage: StageConfig | None = None,
+    question_pack=None,
+    temporal_precheck: bool = False,
+    park_floor: float | None = None,
+    park_actions: tuple[str, ...] = (),
+) -> list[ReconciliationDecision]:
     if not new_facts:
         return []
 

@@ -25,6 +25,7 @@ def vector_search(
     filters: dict | None = None,
     vector_property: str = "embedding",
     query_embedding: list[float] | None = None,
+    include_expired: bool = False,
 ) -> list[SearchResult]:
     """Search memories by vector similarity.
 
@@ -53,8 +54,8 @@ def vector_search(
         if node is None:
             continue
         props = _get_props(node)
-        # Skip expired memories (soft-deleted)
-        if props.get("expired_at") is not None:
+        # Skip expired (superseded or deleted) memories unless asked for
+        if not include_expired and props.get("expired_at") is not None:
             continue
         if engine_filters is not search_filters and not _matches_filters(props, search_filters):
             continue
@@ -95,6 +96,7 @@ def hybrid_search(
     fusion: str | None = None,
     rrf_k: int = 1,
     query_embedding: list[float] | None = None,
+    include_expired: bool = False,
 ) -> list[SearchResult]:
     """Search memories using hybrid BM25 + vector search with RRF fusion.
 
@@ -120,6 +122,7 @@ def hybrid_search(
             filters=filters,
             vector_property=vector_property,
             query_embedding=query_embedding,
+            include_expired=include_expired,
         )
 
     # Scope filters: applied by the engine, and checked again on the returned nodes.
@@ -151,6 +154,7 @@ def hybrid_search(
             filters=filters,
             vector_property=vector_property,
             query_embedding=query_embedding,
+            include_expired=include_expired,
         )
 
     # Re-rank by cosine similarity: hybrid finds candidates, vector ranks them.
@@ -165,8 +169,8 @@ def hybrid_search(
         if node is None:
             continue
         props = _get_props(node)
-        # Skip expired memories (soft-deleted)
-        if props.get("expired_at") is not None:
+        # Skip expired (superseded or deleted) memories unless asked for
+        if not include_expired and props.get("expired_at") is not None:
             continue
         # Check the scope filters again (the engine applied them; a db passed in with db= may not)
         if not _matches_filters(props, all_filters):
@@ -214,6 +218,7 @@ def diverse_search(
     vector_property: str = "embedding",
     query_embedding: list[float] | None = None,
     lambda_mult: float = 0.5,
+    include_expired: bool = False,
 ) -> list[SearchResult]:
     """Search memories using MMR (Maximal Marginal Relevance) for diversity.
 
@@ -238,6 +243,7 @@ def diverse_search(
             filters=filters,
             vector_property=vector_property,
             query_embedding=query_embedding,
+            include_expired=include_expired,
         )
 
     engine_filters, fetch_k = _engine_filters(search_filters, k)
@@ -262,6 +268,7 @@ def diverse_search(
             filters=filters,
             vector_property=vector_property,
             query_embedding=query_embedding,
+            include_expired=include_expired,
         )
 
     search_results: list[SearchResult] = []
@@ -272,7 +279,7 @@ def diverse_search(
         if node is None:
             continue
         props = _get_props(node)
-        if props.get("expired_at") is not None:
+        if not include_expired and props.get("expired_at") is not None:
             continue
         # Post-hoc scope filtering
         all_filters: dict = {"user_id": user_id}
@@ -331,15 +338,20 @@ def search_similar(
     if filters:
         search_filters.update(filters)
 
+    per_embedding = 10
     for emb in embeddings:
         try:
-            hits = db.vector_search(MEMORY_LABEL, vector_property, emb, 10, filters=search_filters)
+            # superseded (expired) memories are skipped below, so ask for spare hits
+            hits = db.vector_search(MEMORY_LABEL, vector_property, emb, per_embedding * 3, filters=search_filters)
         except Exception:
             logger.warning("search_similar: vector_search failed for embedding", exc_info=True)
             continue
 
         logger.debug("search_similar: got %d hits for embedding", len(hits))
+        kept = 0
         for node_id, distance in hits:
+            if kept >= per_embedding:
+                break
             if node_id in seen:
                 continue
             similarity = max(0.0, 1.0 - float(distance))
@@ -351,6 +363,9 @@ def search_similar(
             if node is None:
                 continue
             props = _get_props(node)
+            if props.get("expired_at") is not None:
+                continue  # superseded or deleted: never a reconciliation candidate
+            kept += 1
             results.append(
                 {
                     "id": str(node_id),
