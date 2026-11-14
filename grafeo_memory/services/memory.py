@@ -893,18 +893,10 @@ class _MemoryCore:
     ) -> SearchResponse:
         from grafeo_memory.core.temporal import detect_temporal_hints
 
-        self._recompute_graph_metrics()
-
-        # Deferred community materialization (requires async context for LLM calls)
-        if hasattr(self, "_pending_communities") and self._pending_communities:
-            from grafeo_memory.core.communities import materialize_communities_async
-
-            uid_for_communities = user_id or self._config.user_id
-            await materialize_communities_async(self._db, self._model, uid_for_communities, self._pending_communities)
-            self._pending_communities = None
-
+        # Graph metrics and community summaries are compile() work: search reads what the
+        # last compile stored and never recomputes them or calls the model for them.
         on_usage, total = self._make_usage_collector()
-        uid = user_id or self._config.user_id
+        uid = self._uid(user_id)
         search_filters = self._build_filters(uid, filters)
 
         if memory_type is not None:
@@ -2292,24 +2284,25 @@ class _MemoryCore:
             groups[sid].sort(key=lambda r: getattr(r, "created_at", 0) or 0)
         return dict(groups)
 
-    def _recompute_graph_metrics(self) -> None:
-        """Recompute graph algorithm scores and cache as node properties.
+    def _recompute_graph_metrics(self) -> dict | None:
+        """Recompute graph algorithm scores and cache as node properties (a compile step).
 
         Runs pagerank, betweenness centrality, and louvain community detection.
         Results are stored as node properties for fast access during search scoring.
         Only runs when enable_graph_algorithms is True and the graph has changed.
+        Returns the louvain result when community summaries should be materialized.
 
         Only Memory and Entity nodes are updated. Algorithm computation may span
         the full graph (GrafeoDB API limitation), so scores can be influenced by
         non-memory topology when using a shared database.
         """
         if not self._config.enable_graph_algorithms or not self._graph_dirty:
-            return
+            return None
         self._graph_dirty = False
 
         if not hasattr(self._db, "algorithms"):
             logger.debug("Graph algorithms not available on this db instance")
-            return
+            return None
 
         # Collect IDs of nodes we own so we only write to Memory/Entity nodes.
         owned_ids: set[int] = set()
@@ -2318,9 +2311,10 @@ class _MemoryCore:
         for node_id, _ in self._db.get_nodes_by_label(ENTITY_LABEL):
             owned_ids.add(node_id)
         if not owned_ids:
-            return
+            return None
 
         algos = self._db.algorithms
+        pending: dict | None = None
 
         try:
             ranks = algos.pagerank(0.85, 100, 1e-6)  # ty: ignore[missing-attribute]
@@ -2347,11 +2341,11 @@ class _MemoryCore:
                 if node_id in owned_ids:
                     with contextlib.suppress(Exception):
                         self._db.set_node_property(node_id, "_community", community_id)
-            # Store louvain result for deferred community materialization
             if self._config.enable_community_summaries and communities:
-                self._pending_communities = result
+                pending = result
         except Exception:
             logger.debug("louvain community detection failed", exc_info=True)
+        return pending
 
     async def _store_graph(
         self,
@@ -2985,6 +2979,26 @@ class _MemoryCore:
                 logger.warning("compile: bucket sweep failed", exc_info=True)
         self._write_version += 1
         self._graph_dirty = True
+        # Graph metrics last, over the merged graph; then the LLM community summaries.
+        communities = self._recompute_graph_metrics()
+        if communities:
+            from grafeo_memory.core.communities import materialize_communities_async
+
+            gn = cfg.graph_name
+            users = (
+                {self._tenant}
+                if self._tenant is not None
+                else {
+                    str(p["user_id"])
+                    for _id, p in self._db.get_nodes_by_label(ENTITY_LABEL)
+                    if p.get("user_id") and (not gn or p.get("graph_name") == gn)
+                }
+            )
+            for user in sorted(users):
+                try:
+                    await materialize_communities_async(self._db, self._model, user, communities, _on_usage=on_usage)
+                except Exception:
+                    logger.warning("compile: community summaries failed for one user", exc_info=True)
         return res
 
     def _stats_impl(self) -> MemoryStats:

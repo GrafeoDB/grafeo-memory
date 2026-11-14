@@ -139,7 +139,7 @@ class TestHistoryOnEveryWritePath:
         mid = manager.add("Alice likes tea")[0].memory_id
         for i in range(5):
             manager.update(mid, f"alice likes tea v{i}")
-        manager.search("tea")
+        manager.compile()  # compile computes the graph metrics
         props = manager._db.get_node(int(mid)).properties()
         # History nodes have no edges, so the memory is not a bridge to them.
         assert props["_betweenness"] == 0.0

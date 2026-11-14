@@ -474,7 +474,8 @@ class MemoryConfig:
     mmr_lambda: float = 0.5
     # Cross-session entity reinforcement boost factor
     cross_session_factor: float = 0.0
-    # Graph algorithm-based scoring (opt-in, replaces hand-coded topology)
+    # Graph algorithm-based scoring (opt-in, replaces hand-coded topology); compile() computes
+    # the metrics (call it, or set compilation.every_n_adds), search() only reads them
     enable_graph_algorithms: bool = False
     # Bi-temporal model: extract real-world validity times from facts (opt-in)
     enable_bitemporal: bool = False
@@ -487,7 +488,8 @@ class MemoryConfig:
     db_spill_limit_bytes: int | None = None
     # Episode provenance: store raw messages as Episode nodes with provenance edges (opt-in)
     enable_episodes: bool = False
-    # Community summaries: LLM-generated summaries for entity clusters (opt-in, requires enable_graph_algorithms)
+    # Community summaries: LLM-generated summaries for entity clusters, made by compile()
+    # (opt-in, requires enable_graph_algorithms)
     enable_community_summaries: bool = False
     # Time travel (grafeo 0.6.2 history retention): how far back the database keeps its
     # history for as_of reads: "off", "forever", a timedelta, or seconds as a number.

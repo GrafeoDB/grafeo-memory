@@ -2050,8 +2050,8 @@ class TestAsyncManagerProvenanceAndCommunities:
                     "entities": [alice, acme],
                     "relations": [{"source": "alice", "target": "acme_corp", "relation_type": "works_at"}],
                 },
-                {"name": "Acme staff", "summary": "Alice works at Acme Corp."},  # community summary
                 {"entities": [], "relations": []},  # query entity extraction
+                {"name": "Acme staff", "summary": "Alice works at Acme Corp."},  # community summary
             ],
             enable_graph_algorithms=True,
             enable_community_summaries=True,
@@ -2060,6 +2060,8 @@ class TestAsyncManagerProvenanceAndCommunities:
         async def run():
             await manager.add("Alice works at Acme Corp")
             await manager.search("who works at acme?")
+            assert manager.get_communities() == [], "search never builds communities"
+            await manager.acompile()
             (community,) = manager.get_communities()
             assert community.name == "Acme staff"
             assert sorted(community.member_entities) == ["acme_corp", "alice"]
