@@ -2,21 +2,45 @@
 
 All notable changes to grafeo-memory, an embedded AI memory layer on GrafeoDB.
 
-## [0.3.1] - Unreleased
+## [0.4.0] - Unreleased
 
 Maintenance release: Python 3.13 is the minimum, and the LLM call cache keeps its newest entries when it reloads on Windows.
 
+### Added
+
+- **Search without a model call**: `RetrievalConfig.query_entities="lexical"` (`GRAFEO_MEMORY_QUERY_ENTITIES=lexical`) finds the entities a query names by whole-word match on entity names and merged aliases already in the store. A CLI search drops from 4.2 s to 2.0 s with the same top 3; on LOCOMO conversations 0 to 2 the score stays within noise and LLM calls per run fall from 701 to 204.
+- **Speaker and source on `add()`**: `add(speaker="Alice")` names who is talking, and `add(source="notes")` marks notes or a document, which have no speaker. Also on `add_batch()`, in the CLI (`--speaker`, `--source`) and on the MCP `memory_add` and `memory_add_batch` tools, where `source` defaults to `"notes"` because agent writes are notes.
+- **`for_user(user_id)`**: a view of a `MemoryManager` or `AsyncMemoryManager` that acts for one user, refuses calls naming another, and reaches only that user's memories, history and open decisions by id (`update`, `delete`, `set_importance`, `certify`, `history`, `resolve_open_decision`). Views share the database and caches, and closing one leaves the database open; the unbound manager behaves as in 0.3.0, and subject roots are edited on it only.
+- **Sessions**: `start_session(session_id=None, *, anonymous=False)` returns a session id for `add(session_id=...)`, `assemble()` and `end_session()`. An anonymous session keeps its turns in memory only, never writes long-term memory, is discarded by `end_session()` and expires after `tiers.working.session_ttl` (default 3600 s); `for_user(user_id).start_session(sid)` binds it to that user, one way, and stores its turns. MCP tools `memory_session_start` and `memory_session_end`; `memory_add` takes `session_id`.
+- **The CLI and MCP server act through `for_user()`**: a tool call or command by id reaches the memories of its `user_id` (default: `GRAFEO_MEMORY_USER`) only. `memory_update`, `memory_delete`, `memory_history` and `memory_resolve_decision` take an optional `user_id`.
+- **Prompt version**: `stats().prompts_version` reports `PROMPTS_VERSION` (now 2), and the benchmark harnesses record it in each run's `args.json`.
+
 ### Changed
 
+Extraction results change; scores from 0.3.0 runs are not comparable with 0.4.0 runs.
+
+- **The user_id never enters a prompt**: extraction used it as the speaker's name, so facts read "the user grafeo ..." and the id went to the model provider and, with a decision model, to TypeSafe. Facts now name the speaker from `speaker=` or the message `name`, and otherwise "the user".
+- **Entity names read as written**: the model returns names as they appear ("Acme Corp"); grafeo-memory stores the key (`acme_corp`) as the entity's `name`, so existing stores keep matching, and the written form as `display_name`. Facts no longer carry snake_case names.
+- **Reconciliation candidates are shown as `m1` to `mN`**: the LLM and decision model never see node ids, which they confused with numbers and slugs in the memory text (an UPDATE of `532` fell back to a duplicate ADD). An answer naming anything else gets no target.
+- **`compile()` computes graph metrics and community summaries**: with `enable_graph_algorithms`, PageRank, betweenness and Louvain ran at the start of the first `search()` after a write, and `enable_community_summaries` made that search call the LLM. Search now reads what the last `compile()` stored (call it, or set `compilation.every_n_adds`), and `compile()` summarizes the communities of every user with entities.
+- **Undated facts get no start date**: temporal annotation is told not to stamp a fact whose text gives no date with the current day.
+- **README**: Claude Code setup (`claude mcp add`), a CLI section, every environment variable, `for_user()` and sessions, the API key in the quick start, and absolute database paths for the MCP server.
 - **CI**: tests Python 3.13 to 3.15 on Linux and Windows, and a failing job no longer cancels the others.
 
 ### Removed
 
-- **Python 3.12**: grafeo-memory 0.3.1 requires Python 3.13 or later (`requires-python = ">=3.13"`). On Python 3.12, stay on 0.3.0.
+- **Python 3.12**: grafeo-memory 0.4.0 requires Python 3.13 or later (`requires-python = ">=3.13"`). On Python 3.12, stay on 0.3.0.
 
 ### Fixed
 
+- **`search(include_expired=True)` and `point_in_time` find superseded memories**: vector, hybrid, diverse and graph search dropped every expired memory before the filter ran, so a fact that had since ended could never be recalled. A point-in-time search now returns a superseded memory valid at that moment; a memory removed by DELETE stays out.
+- **An interval no longer ends before it starts**: with `bitemporal` or `ontology.interval_closing`, a memory closed at a date before its recorded start (often an undated fact stamped with the day it was learned) kept both bounds. Its start is now left unknown.
+- **One `add()` stores a fact once**: an engine answer with an UPDATE and an ADD of the same text, or two identical UPDATE decisions, stored the fact twice. Duplicate decisions are merged; the same text updating two memories supersedes both.
+- **A resolved open decision is recorded in its memory's history for that memory's user**: it was recorded for the manager's configured user, so the memory's own user did not see the entry.
 - **The call cache could drop its newest entries on reload**: writes within one clock tick, common on Windows, shared a timestamp, so reloading a cache file larger than `max_entries` or `max_memory_bytes` kept an arbitrary subset instead of the newest. Each write now gets a strictly increasing timestamp; the effect was extra provider calls, never a wrong answer.
+- **Superseded memories are no reconciliation candidates**: `add()` could target a memory an earlier update had already expired, which left the outdated fact active next to the new one. Expired memories are skipped when candidates are gathered.
+- **One `add()` supersedes a memory once**: two UPDATE decisions for the same memory in one call both ran. The second becomes an ADD, and a second DELETE is skipped.
+- **The CLI and MCP server pass env-file keys to the model**: a provider key set only in `GRAFEO_MEMORY_ENV_FILE` reached the settings and the embedder but not the LLM, so entity extraction failed on every search. Both entry points now load the working directory's `.env` and that file into the environment without overriding set variables, and turn off pydantic-ai's startup banner.
 
 ## [0.3.0] - 2026-11-12
 
