@@ -1062,6 +1062,17 @@ class TestImportanceScoring:
         assert float(props["importance"]) == 0.3
         manager.close()
 
+    def test_get_all_reports_importance_and_access_count(self):
+        """get_all() returned importance=None even after set_importance()."""
+        manager = _make_manager([], enable_importance=True)
+        memory_id = manager.add("some fact", infer=False)[0].memory_id
+        manager.set_importance(memory_id, 0.3)
+
+        [memory] = manager.get_all()
+        assert memory.importance == 0.3
+        assert memory.access_count == 0
+        manager.close()
+
     def test_set_importance_invalid_range(self):
         """set_importance() should raise ValueError for out-of-range values."""
         manager = _make_manager([], enable_importance=True)

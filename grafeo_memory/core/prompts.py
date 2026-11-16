@@ -4,7 +4,7 @@ from __future__ import annotations
 
 # Bump on any prompt change that can change extraction or reconciliation results;
 # stats() reports it and benchmark runs record it, so runs on different prompts are never compared.
-PROMPTS_VERSION = 3
+PROMPTS_VERSION = 4
 
 SOURCES = ("chat", "notes")
 
@@ -178,23 +178,31 @@ You are a memory reconciliation assistant. You will receive NEW facts and \
 EXISTING memories from a knowledge base. For each new fact, decide what to do:
 
 - ADD: The fact is genuinely new information. Store it as a new memory.
-- UPDATE: The fact modifies or replaces an existing memory. \
+- UPDATE: The fact changes or corrects a detail that an existing memory states. \
+The new text REPLACES that memory, so it must keep every detail of the old memory that is still true. \
 You MUST set target_memory_id to the ID of the memory being updated, and provide the new text.
 - DELETE: The fact contradicts an existing memory and the old memory should be removed. \
 You MUST set target_memory_id to the ID of the memory being deleted.
 - NONE: The fact is already captured by existing memories. Skip it.
 
 Rules:
-- Prefer UPDATE over DELETE+ADD when information changes \
-(e.g., job change, moved cities, relationship change).
-- Temporal updates: "now works at X" or "started at X" should UPDATE existing "works at Y", not ADD.
-- State changes: "car is fixed" should UPDATE "car is broken", not ADD alongside it.
-- Accumulative facts: "also likes sushi" should ADD — do NOT update existing "likes pizza". \
-The same relationship type can have multiple valid values.
+- UPDATE only when the new fact and the memory describe the SAME detail and the old value no longer holds: \
+a new employer, a new city or office, a new role, a changed status. \
+Example: "now works at X" or "started at X" UPDATEEs "works at Y"; "car is fixed" UPDATEEs "car is broken".
+- A fact about a DIFFERENT detail of the same person, company or thing is ADD, however similar the memory looks. \
+Example: "Acme is based in Berlin" is ADD next to "Acme makes robots"; \
+"Bob plans to beat Carol" is ADD next to "Bob's rival is Carol".
+- Accumulative facts are ADD: "also likes sushi" next to "likes pizza", "built a second app" next to \
+"built an app". The same relationship can have several valid values; do NOT update the existing one.
+- A fact can end an existing memory without naming the same subject: quitting a company ends working there \
+and being on a team there; moving out of a place ends being based there. Such a memory no longer holds: \
+UPDATE it to the new state, or DELETE it when the new state is already stored by another decision.
+- Before choosing UPDATE, check the new text: if it drops a detail of the old memory that is still true, \
+choose ADD instead.
 - Only DELETE when information is explicitly contradicted and cannot be merged via UPDATE.
-- Merge related facts into a single UPDATE when they refer to the same memory.
+- When several new facts change the same detail of one memory, use a single UPDATE for them.
 - If there are no existing memories, all facts should be ADD.
-- For UPDATE and DELETE, always include target_memory_id — without it the action cannot be executed."""
+- For UPDATE and DELETE, always include target_memory_id; without it the action cannot be executed."""
 
 RECONCILIATION_USER = """\
 NEW FACTS:

@@ -50,7 +50,7 @@ with MemoryManager("mistral:mistral-small-latest", config, embedder=embedder) as
     # add Richard left Hooli to start Pied Piper, a compression company built on middle-out.
     # add Pied Piper operates out of the Hacker Hostel in Palo Alto.
 
-    memory.add("We moved out of the Hacker Hostel into our own office in Mountain View", speaker="Richard")
+    memory.add("We moved Pied Piper out of the Hacker Hostel into our own office in Mountain View", speaker="Richard")
     # for example: update Pied Piper operates out of their own office in Mountain View.
 
     for result in memory.search("Where is Pied Piper based?", k=2):

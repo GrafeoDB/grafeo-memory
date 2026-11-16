@@ -35,7 +35,7 @@ def main():
         show(memory.add(text, speaker="Richard"))
 
         # --- Reconciliation: the move updates where Pied Piper is based ---
-        text = "We moved out of the Hacker Hostel into our own office in Mountain View"
+        text = "We moved Pied Piper out of the Hacker Hostel into our own office in Mountain View"
         print(f"\nAdding: {text!r}")
         show(memory.add(text, speaker="Richard"))
 

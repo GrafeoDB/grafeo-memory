@@ -6,7 +6,8 @@ grafeo-memory can process images via a vision-capable LLM:
 3. No images are stored, only the extracted facts
 
 Messages use the OpenAI multimodal content format, which grafeo-memory
-accepts for every provider.
+accepts for every provider. An image is a URL the model can fetch, or a
+data URL, as here: a photo of Pied Piper's whiteboard.
 
 Requires:
     uv add "grafeo-memory[mistral]"
@@ -14,12 +15,18 @@ Requires:
     A vision-capable model (mistral-small-latest, or another provider's)
 """
 
+import base64
+from pathlib import Path
+
 from mistralai.client import Mistral
 
 from grafeo_memory import MemoryConfig, MemoryManager, MistralEmbedder
 
+WHITEBOARD = Path(__file__).with_name("pied_piper_whiteboard.png")
+
 
 def main():
+    whiteboard_url = "data:image/png;base64," + base64.b64encode(WHITEBOARD.read_bytes()).decode()
     embedder = MistralEmbedder(Mistral())
     config = MemoryConfig(
         user_id="richard",
@@ -35,13 +42,8 @@ def main():
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Here's a screenshot from our demo at TechCrunch Disrupt"},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://raw.githubusercontent.com/GrafeoDB/grafeo/main/docs/assets/playground.png"
-                        },
-                    },
+                    {"type": "text", "text": "Here's a photo of our whiteboard at Pied Piper"},
+                    {"type": "image_url", "image_url": {"url": whiteboard_url}},
                 ],
             },
             speaker="Richard",
@@ -55,9 +57,9 @@ def main():
         for e in events:
             print(f"  [{e.action.value.upper()}] {e.text}")
 
-        # --- Search across both ---
-        print("\nSearch: 'What happened at TechCrunch Disrupt?'")
-        for r in memory.search("What happened at TechCrunch Disrupt?"):
+        # --- Search: the answer comes from the image ---
+        print("\nSearch: 'What is Pied Piper's Weissman score?' (only the whiteboard says)")
+        for r in memory.search("What is Pied Piper's Weissman score?", k=3):
             print(f"  [{r.score:.2f}] {r.text}")
 
 
