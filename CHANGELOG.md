@@ -2,6 +2,24 @@
 
 All notable changes to grafeo-memory, an embedded AI memory layer on GrafeoDB.
 
+## [0.4.1] - Unreleased
+
+Documentation release: the README and the example scripts follow the Pied Piper story, lead with Mistral, and were run against `mistral-small-latest` and a local Ollama model. No code or dependency changes; the grafeo pin stays `>=0.6.2,<0.7`.
+
+### Changed
+
+- **README examples follow Pied Piper**: the quick start, users, sessions, history and CLI examples use Richard, Gilfoyle, Dinesh and Russ. The quick start shows an UPDATE as Pied Piper moves from the Hacker Hostel to Mountain View.
+- **Mistral leads the README**: the quick start, provider examples, embedder table and MCP configs show Mistral first, then a local model through Ollama, Anthropic and OpenAI; the Groq and Google examples are gone. The MCP server's default model stays `openai:gpt-4o-mini`.
+- **The example scripts run on Mistral and follow Pied Piper**: all nine scripts in `examples/` use `mistral-small-latest` and `MistralEmbedder`, with Richard, Jared, Jian-Yang, Erlich, Gilfoyle, Russ and Monica. The vision example reads an image from the Grafeo repository, since Mistral could not fetch the old Wikimedia URL.
+- **Install commands quote extras**: `uv add "grafeo-memory[mistral]"`, so zsh does not read the brackets as a glob.
+- **README links are absolute**: the licence, docs and changelog links now work on the PyPI page.
+
+### Fixed
+
+- **The model table matches 0.4**: `mistral-small-latest` extracts in one combined call per `add()`; the README said it fell back to three.
+- **The session example says when turns are stored**: binding a session to a user stores its turns, and `end_session()` stores them only with `tiers.working.defer_extraction`.
+- **The rollback from grafeo 0.6 pins both packages**: `uv add "grafeo-memory<0.3" "grafeo<0.6"`, since grafeo-memory 0.2.2 alone resolves grafeo 0.6.
+
 ## [0.4.0] - 2026-11-14
 
 Identity and tenancy release: the user_id never reaches a prompt, `for_user()` scopes a manager to one user, and sessions can be anonymous. Before upgrading: Python 3.13 is the minimum, extraction results change (0.3.0 benchmark runs are not comparable), search makes no model call by default (`query_entities="llm"` restores it), and graph metrics are computed by `compile()`.
