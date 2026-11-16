@@ -12,12 +12,7 @@
 
 AI memory layer powered by [GrafeoDB](https://github.com/GrafeoDB/grafeo), an embedded graph database with native vector search.
 
-No servers, no Docker, no Neo4j, no Qdrant. One `.grafeo` file + one LLM.
-
-```
-Typical memory stack: Containers with Neo4j + Qdrant, Embedding API + LLM
-grafeo-memory stack:  grafeo (single file) + LLM (and optional decision model)
-```
+No servers, no Docker: one `.grafeo` file and one LLM (and an optional decision model).
 
 ## Install
 
@@ -533,14 +528,14 @@ config = MemoryConfig(
 
 ## Why grafeo-memory?
 
-| | Traditional stack | grafeo-memory |
-|---|---|---|
-| Infrastructure | Neo4j + Qdrant (Docker) | **Single .grafeo file** |
-| Install size | ~750MB (Docker images) | **~16MB** (uv add) |
-| Offline/edge | Requires servers | **Yes** |
-| Graph + vector | Separate services | **Unified engine** |
-| LLM providers | Varies | **pydantic-ai** (Mistral, Ollama, Anthropic, OpenAI and more) |
-| Embeddings | External API required | **Protocol-based** (any provider) |
+- **One file**: memories, embeddings, entities and history live in a single `.grafeo` file, with no server or
+  container to run.
+- **Small install**: about 16 MB with `uv add`.
+- **Offline and at the edge**: the database runs inside the process; only model calls leave the device, and none
+  do with a local model through Ollama.
+- **Graph and vector in one engine**: search combines vector similarity with graph context.
+- **Any LLM**: pydantic-ai model strings (Mistral, Ollama, Anthropic, OpenAI and more).
+- **Any embedder**: Mistral and OpenAI are built in; others plug in through the `EmbeddingClient` protocol.
 
 ## API Reference
 
