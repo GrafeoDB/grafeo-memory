@@ -26,7 +26,7 @@ def main():
     embedder = MistralEmbedder(client)
 
     config = MemoryConfig(
-        user_id="markus",
+        user_id="monica",
         enable_bitemporal=True,
         enable_episodes=True,
         run_id="bench_run_1",
@@ -41,10 +41,10 @@ def main():
         print("=== Phase 1: Bi-Temporal ===\n")
 
         msgs = [
-            "Markus joined Acme Corp as a software engineer in March 2022.",
-            "Markus was promoted to senior engineer at Acme Corp in January 2024.",
-            "Markus left Acme and joined Globex Industries in September 2024.",
-            "Markus started learning Rust in 2023, he previously only knew Python and Go.",
+            "Monica joined Raviga Capital as an associate in March 2014.",
+            "Monica started working with Pied Piper for Raviga in April 2015.",
+            "Monica left Raviga Capital in March 2018 and founded Bream-Hall with Laurie Bream as a partner.",
+            "Monica has been friends with Richard Hendricks since 2014.",
         ]
 
         for msg in msgs:
@@ -58,12 +58,12 @@ def main():
                     print(f"           was: {e.old_text}")
             print(f"  ({dt:.0f}ms)\n")
 
-        # Point-in-time search: "as of mid-2023"
+        # Point-in-time search: "as of mid-2016"
         from datetime import UTC, datetime
 
-        mid_2023 = int(datetime(2023, 7, 1, tzinfo=UTC).timestamp() * 1000)
-        print("Search: 'Where does Markus work?' (point_in_time=2023-07-01)")
-        results = mem.search("Where does Markus work?", point_in_time=mid_2023)
+        mid_2016 = int(datetime(2016, 7, 1, tzinfo=UTC).timestamp() * 1000)
+        print("Search: 'Where does Monica work?' (point_in_time=2016-07-01)")
+        results = mem.search("Where does Monica work?", point_in_time=mid_2016)
         for r in results[:3]:
             va = f"  valid_at={r.valid_at}" if r.valid_at else ""
             ia = f"  invalid_at={r.invalid_at}" if r.invalid_at else ""
@@ -71,8 +71,8 @@ def main():
         print()
 
         # Current search (no point_in_time)
-        print("Search: 'Where does Markus work?' (current)")
-        results = mem.search("Where does Markus work?")
+        print("Search: 'Where does Monica work?' (current)")
+        results = mem.search("Where does Monica work?")
         for r in results[:3]:
             va = f"  valid_at={r.valid_at}" if r.valid_at else ""
             print(f"  [{r.score:.2f}] {r.text}{va}")

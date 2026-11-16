@@ -1,10 +1,10 @@
-"""Mistral quick-start, using grafeo-memory with Mistral models.
+"""Mistral walkthrough: add, reconcile, search, and history.
 
-Demonstrates the full workflow with Mistral as both the LLM and
-embedding provider: add, reconcile, search, and history.
+Jared leaves Hooli for Pied Piper. Mistral is both the LLM and the
+embedding provider.
 
 Requires:
-    uv add grafeo-memory[mistral]
+    uv add "grafeo-memory[mistral]"
     MISTRAL_API_KEY environment variable
 """
 
@@ -13,48 +13,43 @@ from mistralai.client import Mistral
 from grafeo_memory import MemoryConfig, MemoryManager, MistralEmbedder
 
 
+def show(events):
+    for e in events:
+        print(f"  [{e.action.value.upper()}] {e.text}")
+        if e.old_text:
+            print(f"    (was: {e.old_text})")
+
+
 def main():
-    client = Mistral()
-    embedder = MistralEmbedder(client)
-    config = MemoryConfig(user_id="alice")
+    embedder = MistralEmbedder(Mistral())
+    config = MemoryConfig(user_id="jared")
 
     with MemoryManager("mistral:mistral-small-latest", config, embedder=embedder) as memory:
         # --- Add memories ---
-        print("Adding: 'My name is Alice and I work at Acme Corp as a software engineer'")
-        events = memory.add("My name is Alice and I work at Acme Corp as a software engineer")
-        for e in events:
-            print(f"  [{e.action.value.upper()}] {e.text}")
+        text = "I work at Hooli in business development, on Gavin Belson's team"
+        print(f"Adding: {text!r}")
+        show(memory.add(text, speaker="Jared"))
 
-        print()
-        print("Adding: 'I love sushi and I'm learning Rust'")
-        events = memory.add("I love sushi and I'm learning Rust")
-        for e in events:
-            print(f"  [{e.action.value.upper()}] {e.text}")
+        text = "My birth name is Donald Dunn"
+        print(f"\nAdding: {text!r}")
+        show(memory.add(text, speaker="Jared"))
 
         # --- Reconciliation: update a contradicting fact ---
-        print()
-        print("Adding: 'I just switched jobs: I now work at Google as a staff engineer'")
-        events = memory.add("I just switched jobs: I now work at Google as a staff engineer")
-        for e in events:
-            print(f"  [{e.action.value.upper()}] {e.text}")
-            if e.old_text:
-                print(f"    (was: {e.old_text})")
+        text = "I quit Hooli and joined Pied Piper as head of business development"
+        print(f"\nAdding: {text!r}")
+        show(memory.add(text, speaker="Jared"))
 
         # --- Search ---
-        print()
-        print("Searching: 'Where does Alice work?'")
-        results = memory.search("Where does Alice work?")
-        for r in results:
+        print("\nSearching: 'Where does Jared work?'")
+        for r in memory.search("Where does Jared work?", k=3):
             print(f"  [{r.score:.2f}] {r.text}")
 
         # --- History ---
-        print()
         all_memories = memory.get_all()
-        print(f"All memories ({len(all_memories)}):")
+        print(f"\nAll memories ({len(all_memories)}):")
         for m in all_memories:
             print(f"  [{m.memory_id}] {m.text}")
-            hist = memory.history(m.memory_id)
-            for h in hist:
+            for h in memory.history(m.memory_id):
                 print(f"    {h.event}: {h.new_text}")
 
 

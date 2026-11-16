@@ -4,42 +4,42 @@ AsyncMemoryManager provides the same API as MemoryManager
 but with async/await support for frameworks like FastAPI, aiohttp, etc.
 
 Requires:
-    uv add grafeo-memory[openai]
-    OPENAI_API_KEY environment variable
+    uv add "grafeo-memory[mistral]"
+    MISTRAL_API_KEY environment variable
 """
 
 import asyncio
 
-from openai import OpenAI
+from mistralai.client import Mistral
 
-from grafeo_memory import AsyncMemoryManager, MemoryConfig, OpenAIEmbedder
+from grafeo_memory import AsyncMemoryManager, MemoryConfig, MistralEmbedder
 
 
 async def main():
-    embedder = OpenAIEmbedder(OpenAI())
-    config = MemoryConfig(user_id="alice")
+    embedder = MistralEmbedder(Mistral())
+    config = MemoryConfig(user_id="jian-yang")
 
-    async with AsyncMemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
+    async with AsyncMemoryManager("mistral:mistral-small-latest", config, embedder=embedder) as memory:
         # --- Async add ---
         print("Adding memories:")
-        events = await memory.add("Alice is learning Rust and enjoys systems programming")
+        events = await memory.add(
+            "I built Not Hotdog, an app that tells you if food is a hotdog or not", speaker="Jian-Yang"
+        )
         for e in events:
             print(f"  [{e.action.value.upper()}] {e.text}")
 
-        events = await memory.add("Alice prefers Neovim over VS Code")
+        events = await memory.add("My fridge has a screen and it talks", speaker="Jian-Yang")
         for e in events:
             print(f"  [{e.action.value.upper()}] {e.text}")
 
         # --- Async search ---
-        print("\nSearch: 'What is Alice learning?'")
-        results = await memory.search("What is Alice learning?")
-        for r in results:
+        print("\nSearch: 'What did Jian-Yang build?'")
+        for r in await memory.search("What did Jian-Yang build?"):
             print(f"  [{r.score:.2f}] {r.text}")
 
         # --- Async get all ---
         print("\nAll memories:")
-        all_memories = await memory.get_all()
-        for m in all_memories:
+        for m in await memory.get_all():
             print(f"  [{m.memory_id}] {m.text}")
 
 
