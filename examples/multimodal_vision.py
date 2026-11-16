@@ -5,58 +5,61 @@ grafeo-memory can process images via a vision-capable LLM:
 2. Text descriptions flow through normal extraction
 3. No images are stored, only the extracted facts
 
-Messages use the OpenAI multimodal content format.
+Messages use the OpenAI multimodal content format, which grafeo-memory
+accepts for every provider. An image is a URL the model can fetch, or a
+data URL, as here: a photo of Pied Piper's whiteboard.
 
 Requires:
-    uv add grafeo-memory[openai]
-    OPENAI_API_KEY environment variable
-    A vision-capable model (gpt-4o, gpt-4o-mini)
+    uv add "grafeo-memory[mistral]"
+    MISTRAL_API_KEY environment variable
+    A vision-capable model (mistral-small-latest, or another provider's)
 """
 
-from openai import OpenAI
+import base64
+from pathlib import Path
 
-from grafeo_memory import MemoryConfig, MemoryManager, OpenAIEmbedder
+from mistralai.client import Mistral
+
+from grafeo_memory import MemoryConfig, MemoryManager, MistralEmbedder
+
+WHITEBOARD = Path(__file__).with_name("pied_piper_whiteboard.png")
 
 
 def main():
-    embedder = OpenAIEmbedder(OpenAI())
+    whiteboard_url = "data:image/png;base64," + base64.b64encode(WHITEBOARD.read_bytes()).decode()
+    embedder = MistralEmbedder(Mistral())
     config = MemoryConfig(
-        user_id="alice",
+        user_id="richard",
         enable_vision=True,
         # Optionally use a different model for image description:
-        # vision_model="openai:gpt-4o",
+        # vision_model="mistral:mistral-medium-latest",
     )
 
-    with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
+    with MemoryManager("mistral:mistral-small-latest", config, embedder=embedder) as memory:
         # --- Add a multimodal message ---
         print("Adding a multimodal message with text + image:")
         events = memory.add(
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Here's a photo from the team offsite"},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/PNG_transparency_demonstration_1.png/280px-PNG_transparency_demonstration_1.png"
-                        },
-                    },
+                    {"type": "text", "text": "Here's a photo of our whiteboard at Pied Piper"},
+                    {"type": "image_url", "image_url": {"url": whiteboard_url}},
                 ],
-            }
+            },
+            speaker="Richard",
         )
         for e in events:
             print(f"  [{e.action.value.upper()}] {e.text}")
 
         # --- Plain text still works normally ---
         print("\nAdding plain text:")
-        events = memory.add("The offsite was in Lake Tahoe, we discussed Q3 roadmap")
+        events = memory.add("We won TechCrunch Disrupt with the middle-out demo", speaker="Richard")
         for e in events:
             print(f"  [{e.action.value.upper()}] {e.text}")
 
-        # --- Search across both ---
-        print("\nSearch: 'What happened at the offsite?'")
-        results = memory.search("What happened at the offsite?")
-        for r in results:
+        # --- Search: the answer comes from the image ---
+        print("\nSearch: 'What is Pied Piper's Weissman score?' (only the whiteboard says)")
+        for r in memory.search("What is Pied Piper's Weissman score?", k=3):
             print(f"  [{r.score:.2f}] {r.text}")
 
 

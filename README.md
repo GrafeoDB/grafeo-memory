@@ -8,77 +8,61 @@
 [![CI](https://github.com/GrafeoDB/grafeo-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/GrafeoDB/grafeo-memory/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/GrafeoDB/grafeo-memory/graph/badge.svg)](https://codecov.io/gh/GrafeoDB/grafeo-memory)
 [![PyPI](https://img.shields.io/pypi/v/grafeo-memory.svg)](https://pypi.org/project/grafeo-memory/)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENCE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/GrafeoDB/grafeo-memory/blob/main/LICENCE)
 
 AI memory layer powered by [GrafeoDB](https://github.com/GrafeoDB/grafeo), an embedded graph database with native vector search.
 
-No servers, no Docker, no Neo4j, no Qdrant. One `.grafeo` file + one LLM.
-
-```
-Typical memory stack: Containers with Neo4j + Qdrant, Embedding API + LLM
-grafeo-memory stack:  grafeo (single file) + LLM (and optional decision model)
-```
+No servers, no Docker: one `.grafeo` file and one LLM (and an optional decision model).
 
 ## Install
 
 ```bash
-uv add grafeo-memory                   # base (bring your own LLM + embedder)
-uv add grafeo-memory[mistral]          # + Mistral embeddings
-uv add grafeo-memory[openai]           # + OpenAI embeddings
-uv add grafeo-memory[anthropic]        # + Anthropic models
-uv add grafeo-memory[mcp,openai]       # + MCP server for AI agents (with the provider extra of its model)
-uv add grafeo-memory[jev]              # + TypeSafe Jev decision model (hosted, opt-in)
-uv add grafeo-memory[agent-framework]  # + Microsoft Agent Framework vector store
-uv add grafeo-memory[bench]            # + LOCOMO / LongMemEval / BEAM harnesses
-uv add grafeo-memory[all]              # all LLM providers
+uv add grafeo-memory                     # base (bring your own LLM + embedder)
+uv add "grafeo-memory[mistral]"          # + Mistral models and embeddings
+uv add "grafeo-memory[anthropic]"        # + Anthropic models
+uv add "grafeo-memory[openai]"           # + OpenAI models and embeddings, also local models through Ollama
+uv add "grafeo-memory[mcp,mistral]"      # + MCP server for AI agents (with the provider extra of its model)
+uv add "grafeo-memory[jev]"              # + TypeSafe Jev decision model (hosted, opt-in)
+uv add "grafeo-memory[agent-framework]"  # + Microsoft Agent Framework vector store
+uv add "grafeo-memory[bench]"            # + LOCOMO / LongMemEval / BEAM harnesses
+uv add "grafeo-memory[all]"              # all LLM providers
 ```
 
 ## Quick Start
 
-### OpenAI
-
-Set `OPENAI_API_KEY` first (for Mistral, `MISTRAL_API_KEY`).
-
-```python
-from openai import OpenAI
-from grafeo_memory import MemoryManager, MemoryConfig, OpenAIEmbedder
-
-embedder = OpenAIEmbedder(OpenAI())
-config = MemoryConfig(db_path="./memory.grafeo", user_id="alice")
-
-with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
-    for event in memory.add("I just started a new job at Acme Corp as a data scientist", speaker="Alice"):
-        print(event.action.value, event.text)
-    # add Alice works at Acme Corp as a data scientist.
-
-    memory.add("I've been promoted to senior data scientist at Acme", speaker="Alice")
-    # update Alice is a senior data scientist at Acme Corp.
-
-    memory.add("I left Acme and joined Beta Inc", speaker="Alice")
-    # update Alice left Acme Corp and works at Beta Inc.
-
-    for result in memory.search("Where does Alice work?"):
-        print(round(result.score, 2), result.text)
-    # 0.92 Alice left Acme Corp and works at Beta Inc.
-```
-
-The exact wording depends on the model. `user_id` partitions the store and never reaches the model; `speaker`
-names who is talking (without it, facts say "the user"), and `source="notes"` marks notes or documents, which have
-no speaker.
-
-### Mistral
+Set `MISTRAL_API_KEY` first. Richard has just left Hooli to start Pied Piper:
 
 ```python
 from mistralai.client import Mistral
 from grafeo_memory import MemoryManager, MemoryConfig, MistralEmbedder
 
 embedder = MistralEmbedder(Mistral())
-config = MemoryConfig(db_path="./memory.grafeo", user_id="alice")
+config = MemoryConfig(db_path="./pied-piper.grafeo", user_id="richard")
 
 with MemoryManager("mistral:mistral-small-latest", config, embedder=embedder) as memory:
-    events = memory.add("I just started a new job at Acme Corp as a data scientist")
-    results = memory.search("Where does Alice work?")
+    for event in memory.add(
+        "I just left Hooli to start Pied Piper, a compression company built on middle-out. "
+        "We work out of the Hacker Hostel in Palo Alto",
+        speaker="Richard",
+    ):
+        print(event.action.value, event.text)
+    # for example:
+    # add Richard left Hooli to start Pied Piper, a compression company built on middle-out.
+    # add Pied Piper operates out of the Hacker Hostel in Palo Alto.
+
+    memory.add("We moved Pied Piper out of the Hacker Hostel into our own office in Mountain View", speaker="Richard")
+    # for example: update Pied Piper operates out of their own office in Mountain View.
+
+    for result in memory.search("Where is Pied Piper based?", k=2):
+        print(round(result.score, 2), result.text)
+    # for example:
+    # 0.96 Pied Piper operates out of their own office in Mountain View.
+    # 0.85 Richard left Hooli to start Pied Piper, a compression company built on middle-out.
 ```
+
+The exact wording depends on the model. `user_id` partitions the store and never reaches the model; `speaker`
+names who is talking (without it, facts say "the user"), and `source="notes"` marks notes or documents, which have
+no speaker. Other models, a local one included, are in [Supported LLM Providers](#supported-llm-providers).
 
 ## How It Works
 
@@ -108,8 +92,8 @@ grafeo-memory implements the **reconciliation loop**, the intelligence layer tha
 
 ## Documentation
 
-- [docs/architecture.md](docs/architecture.md): the package layers and the import rules between them
-- [docs/benchmarks.md](docs/benchmarks.md): LOCOMO, LongMemEval and BEAM harnesses, matrix rounds, test gates
+- [docs/architecture.md](https://github.com/GrafeoDB/grafeo-memory/blob/main/docs/architecture.md): the package layers and the import rules between them
+- [docs/benchmarks.md](https://github.com/GrafeoDB/grafeo-memory/blob/main/docs/benchmarks.md): LOCOMO, LongMemEval and BEAM harnesses, matrix rounds, test gates
 
 The modules live in layers (`grafeo_memory.common`, `.providers`, `.core`, `.services`); import the public API
 with `from grafeo_memory import ...`. Older module paths such as `grafeo_memory.manager` or
@@ -118,18 +102,20 @@ with `from grafeo_memory import ...`. Older module paths such as `grafeo_memory.
 ## Multi-User Isolation
 
 ```python
-config = MemoryConfig(db_path="./chat_memory.grafeo")
+config = MemoryConfig(db_path="./pied-piper.grafeo")
 
-with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
+with MemoryManager("mistral:mistral-small-latest", config, embedder=embedder) as memory:
     # Each user's memories are isolated
-    memory.add("I love hiking in the mountains", user_id="bob")
-    memory.add("I prefer beach vacations", user_id="carol")
+    built = memory.add(
+        "I built Son of Anton, an AI that fixes bugs by deleting the code", user_id="gilfoyle", speaker="Gilfoyle"
+    )
+    memory.add("Gilfoyle is my rival", user_id="dinesh", speaker="Dinesh")
 
-    bob_results = memory.search("vacation preferences", user_id="bob")
-    # -> hiking, mountains
+    memory.search("Son of Anton", user_id="gilfoyle")
+    # -> Gilfoyle built Son of Anton, an AI designed to fix bugs by deleting code.
 
-    carol_results = memory.search("vacation preferences", user_id="carol")
-    # -> beach vacations
+    memory.search("Son of Anton", user_id="dinesh")
+    # -> Dinesh has a rival named Gilfoyle. (Dinesh's own memories only)
 ```
 
 `user_id` on each call is a partition, not a permission: the unbound manager serves every user, and a call by
@@ -137,10 +123,10 @@ id (`update`, `delete`, `history`) reaches any memory in its scope. A server tha
 should use a view:
 
 ```python
-bob = memory.for_user("bob")  # shares the database and caches
-bob.add("I moved to Lisbon")
-bob.delete(carol_memory_id)  # False: another user's memory is out of reach
-bob.search("city", user_id="carol")  # ValueError: the view is bound to bob
+dinesh = memory.for_user("dinesh")  # shares the database and caches
+dinesh.add("I built PiperChat, a video chat app", speaker="Dinesh")
+dinesh.delete(built[0].memory_id)  # False: Gilfoyle's memory is out of reach
+dinesh.search("Son of Anton", user_id="gilfoyle")  # ValueError: the view is bound to dinesh
 ```
 
 grafeo-memory does not authenticate anyone: the host application verifies who the user is and passes that id.
@@ -150,16 +136,18 @@ The CLI and the MCP server act through such a view for their `user_id` (default 
 
 ```python
 sid = memory.start_session(anonymous=True)  # a visitor: turns stay in memory only
-memory.add("I'm looking for a quiet hotel", session_id=sid)
-context = memory.assemble("hotel", sid)  # the session window, nothing long-term
+memory.add("I want to put my money into a compression company", session_id=sid)
+context = memory.assemble("compression", sid)  # the session window, nothing long-term
 
-memory.for_user("bob").start_session(sid)  # bob signs in: the session joins bob, one way
-memory.for_user("bob").end_session(sid)  # promoted to bob's long-term memory
+russ = memory.for_user("russ")
+russ.start_session(sid)  # Russ signs in: the session joins russ, one way, and its turns are stored
+russ.end_session(sid)  # closes the session
 ```
 
 An anonymous session never writes long-term memory; `end_session()` discards it, and it expires
-`tiers.working.session_ttl` seconds (default 3600) after its last turn. Binding stores its turns for the user once
-(at `end_session()` with `tiers.working.defer_extraction`). Sessions live in the process, not in the database file.
+`tiers.working.session_ttl` seconds (default 3600) after its last turn. Binding stores its turns for the user once:
+when it binds, or at `end_session()` with `tiers.working.defer_extraction`. Sessions live in the process, not in the
+database file.
 
 ## Persistence
 
@@ -196,29 +184,30 @@ Grafeo 0.6 writes a new database format, and the switch is one way:
 3. **Later opens** find a 0.6 file: nothing migrates again and the `.pre-0.6` copy is left alone. Keep it until you
    are sure you will not go back.
 4. **Grafeo 0.5 cannot open the migrated database.** To go back, stop the 0.6 processes, move the migrated file
-   away, rename the `.pre-0.6` file (or directory) to the original name and run grafeo-memory 0.2.x with
-   Grafeo 0.5.44. Changes made after the migration are only in the migrated file.
+   away, rename the `.pre-0.6` file (or directory) to the original name and pin both packages back:
+   `uv add "grafeo-memory<0.3" "grafeo<0.6"` (grafeo-memory 0.2.2 alone would resolve Grafeo 0.6). Changes made
+   after the migration are only in the migrated file.
 5. Grafeo 0.7 will not read 0.5.x databases, so open each one once with 0.6 before upgrading further.
 
 Your memories, embeddings, entities, relations, communities and history are ordinary graph data, so they move with
 the database: grafeo-memory needs no migration step of its own, and vector search works on the migrated database
 right away. Grafeo's own guide is [Upgrading to 0.6](https://docs.grafeo.dev/get-started/upgrading/0.6/);
-release notes are in [CHANGELOG.md](CHANGELOG.md).
+release notes are in [CHANGELOG.md](https://github.com/GrafeoDB/grafeo-memory/blob/main/CHANGELOG.md).
 
 ## Memory History
 
 `history(memory_id)` returns every change grafeo-memory made to a memory (ADD, UPDATE, DELETE), oldest first:
 
 ```python
-mid = memory.add("I like tea", infer=False)[0].memory_id
-memory.update(mid, "I like green tea")
+mid = memory.add("Richard indents with tabs", infer=False)[0].memory_id
+memory.update(mid, "Richard indents with tabs, never spaces")
 memory.delete(mid)
 
 for entry in memory.history(mid):
     print(entry.event, entry.old_text, entry.new_text, entry.timestamp)
-# ADD None I like tea ...
-# UPDATE I like tea I like green tea ...
-# DELETE I like green tea None ...
+# ADD None Richard indents with tabs ...
+# UPDATE Richard indents with tabs Richard indents with tabs, never spaces ...
+# DELETE Richard indents with tabs, never spaces None ...
 ```
 
 - History is stored as `:History` nodes in the same database, keyed by the memory id and not connected by edges,
@@ -233,11 +222,11 @@ for entry in memory.history(mid):
 ```python
 import grafeo
 
-db = grafeo.GrafeoDB("./memory.grafeo")
-memory = MemoryManager("openai:gpt-4o-mini", config, embedder=embedder, db=db)
+db = grafeo.GrafeoDB("./pied-piper.grafeo")
+memory = MemoryManager("mistral:mistral-small-latest", config, embedder=embedder, db=db)
 
-memory.delete_all(user_id="alice")
-db.execute("MATCH (h:History) WHERE h.user_id = $uid DELETE h", {"uid": "alice"})
+memory.delete_all(user_id="richard")
+db.execute("MATCH (h:History) WHERE h.user_id = $uid DELETE h", {"uid": "richard"})
 ```
 
 ## Supported LLM Providers
@@ -245,42 +234,44 @@ db.execute("MATCH (h:History) WHERE h.user_id = $uid DELETE h", {"uid": "alice"}
 grafeo-memory uses [pydantic-ai](https://ai.pydantic.dev) model strings, so any provider pydantic-ai supports works out of the box:
 
 ```python
-# OpenAI: use OpenAIEmbedder for embeddings
-MemoryManager("openai:gpt-4o-mini", config, embedder=OpenAIEmbedder(OpenAI()))
-
-# Anthropic: pair with OpenAI or custom embedder
-MemoryManager("anthropic:claude-sonnet-4-5-20250929", config, embedder=embedder)
-
-# Groq: pair with OpenAI or custom embedder
-MemoryManager("groq:llama-3.3-70b-versatile", config, embedder=embedder)
-
-# Mistral: use MistralEmbedder for embeddings
+# Mistral: MistralEmbedder for embeddings
 MemoryManager("mistral:mistral-small-latest", config, embedder=MistralEmbedder(Mistral()))
 
-# Google: pair with OpenAI or custom embedder
-MemoryManager("google-gla:gemini-2.0-flash", config, embedder=embedder)
+# A local model through Ollama (the [openai] extra; OLLAMA_BASE_URL=http://localhost:11434/v1)
+MemoryManager("ollama:ministral-3:3b", config, embedder=embedder)
+
+# Anthropic: pair with MistralEmbedder or a custom embedder
+MemoryManager("anthropic:claude-sonnet-4-5-20250929", config, embedder=embedder)
+
+# OpenAI: OpenAIEmbedder for embeddings
+from openai import OpenAI
+from grafeo_memory import OpenAIEmbedder
+
+MemoryManager("openai:gpt-4o-mini", config, embedder=OpenAIEmbedder(OpenAI()))
 ```
 
 ### Built-in Embedders
 
 | Class | Provider | Default Model | Install Extra |
-|---|---|---|---|
-| `OpenAIEmbedder` | OpenAI | `text-embedding-3-small` | `[openai]` |
+| --- | --- | --- | --- |
 | `MistralEmbedder` | Mistral | `mistral-embed` | `[mistral]` |
+| `OpenAIEmbedder` | OpenAI | `text-embedding-3-small` | `[openai]` |
 
-Both accept an optional `model` parameter to override the default.
+Both accept an optional `model` parameter to override the default. A local embedding model plugs in through the
+`EmbeddingClient` protocol (see [Custom Embeddings](#custom-embeddings)).
 
 ### Which model works best?
 
-| Provider | Combined extraction | Individual extraction | Notes |
-| --- | --- | --- | --- |
-| OpenAI (gpt-4o-mini) | Works | Works | Recommended default |
-| Anthropic (claude-sonnet) | Works | Works | Untested in CI |
-| Mistral (mistral-small) | Falls back | Works | 3 API calls instead of 1 |
-| Groq | Unknown | Unknown | Needs testing |
-| Google | Unknown | Unknown | Needs testing |
+| Model | Status |
+| --- | --- |
+| Mistral (`mistral-small-latest`) | Tested: the benchmarks and these examples run on it, one extraction call per `add()` |
+| Local through Ollama (`ministral-3:3b`) | Tested with the Quick Start; a small model keeps fewer details |
+| Anthropic (`claude-sonnet`) | Works; not tested in CI |
+| OpenAI (`gpt-4o-mini`) | Works; tested in earlier releases |
 
-grafeo-memory tries a single "combined" LLM call first (facts + entities + relations in one schema). If the model cannot handle the combined schema, it falls back to separate calls automatically. Mistral models typically trigger this fallback, which means 3 API calls per `add()` instead of 1. The fallback is silent (logged at DEBUG level, no traceback printed).
+grafeo-memory tries a single "combined" LLM call first (facts + entities + relations in one schema). If the model
+cannot handle the combined schema, it falls back to separate calls automatically, which means 3 API calls per
+`add()` instead of 1. The fallback is silent (logged at DEBUG level, no traceback printed).
 
 ## Custom Embeddings
 
@@ -300,7 +291,7 @@ class MyEmbedder:
         return 1024  # your model's output dimensions
 
 
-memory = MemoryManager("openai:gpt-4o-mini", config, embedder=MyEmbedder())
+memory = MemoryManager("mistral:mistral-small-latest", config, embedder=MyEmbedder())
 ```
 
 ## Decision Engines and Pipeline Toggles
@@ -396,9 +387,9 @@ delete it together with the database, or call `MemoryCache.clear()`.
 
 ```bash
 export GRAFEO_MEMORY_DB="$HOME/.grafeo/memory.grafeo"   # an absolute path
-grafeo-memory add "I prefer uv over pip"
-grafeo-memory add "release tags are signed" --source notes
-grafeo-memory search "package manager" -k 5
+grafeo-memory add "I indent with tabs, never spaces" --speaker Richard
+grafeo-memory add "Middle-out compression scores 5.2 on the Weissman scale" --source notes
+grafeo-memory search "Weissman score" -k 5
 grafeo-memory list
 grafeo-memory history 42
 grafeo-memory delete 42
@@ -415,12 +406,12 @@ Global flags: `--model`, `--db`, `--user` (each overrides its environment variab
 grafeo-memory includes a built-in MCP server so AI agents (Claude Desktop, Cursor, etc.) can use it as a tool.
 
 ```bash
-uv add grafeo-memory[mcp,openai]    # default model openai:gpt-4o-mini
-uv add grafeo-memory[mcp,mistral]   # GRAFEO_MEMORY_MODEL=mistral:...
+uv add "grafeo-memory[mcp,mistral]"   # GRAFEO_MEMORY_MODEL=mistral:mistral-small-latest
+uv add "grafeo-memory[mcp,openai]"    # the default model, openai:gpt-4o-mini
 ```
 
-The server needs the provider extra of its model too: OpenAI embeddings by default, Mistral embeddings for a
-`mistral:` model.
+The server needs the provider extra of its model too: Mistral embeddings for a `mistral:` model, OpenAI embeddings
+otherwise. Without `GRAFEO_MEMORY_MODEL` it uses `openai:gpt-4o-mini`.
 
 Give the server an absolute database path: a client starts it in a working directory of its choosing, so
 `./memory.grafeo` lands in a different place per client.
@@ -447,9 +438,9 @@ Add to `claude_desktop_config.json`:
     "grafeo-memory": {
       "command": "grafeo-memory-mcp",
       "env": {
-        "GRAFEO_MEMORY_MODEL": "openai:gpt-4o-mini",
+        "GRAFEO_MEMORY_MODEL": "mistral:mistral-small-latest",
         "GRAFEO_MEMORY_DB": "/Users/me/.grafeo/memory.grafeo",
-        "OPENAI_API_KEY": "..."
+        "MISTRAL_API_KEY": "..."
       }
     }
   }
@@ -492,7 +483,7 @@ file named by `GRAFEO_MEMORY_ENV_FILE`; a variable that is already set wins, and
 | `GRAFEO_MEMORY_DB` | *(in-memory)* | Database file path; use an absolute path |
 | `GRAFEO_MEMORY_USER` | `default` | Default user ID |
 | `GRAFEO_MEMORY_ENV_FILE` | *(none)* | A `.env` file to read keys and settings from |
-| `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `GOOGLE_API_KEY` | *(none)* | Provider keys, never logged |
+| `MISTRAL_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `GOOGLE_API_KEY` | *(none)* | Provider keys, never logged |
 | `GRAFEO_MEMORY_QUERY_ENTITIES` | `lexical` | `llm`: search asks the model for the entities a query names (one call per search) |
 | `GRAFEO_MEMORY_CACHE_ENABLED` | `false` | Cache LLM, embedding and decision calls |
 | `GRAFEO_MEMORY_CACHE_MAX_ENTRIES`, `GRAFEO_MEMORY_CACHE_MAX_MEMORY_MB`, `GRAFEO_MEMORY_CACHE_MAX_STORAGE_MB` | `10000`, `128`, `512` | Cache limits |
@@ -537,20 +528,20 @@ config = MemoryConfig(
 
 ## Why grafeo-memory?
 
-| | Traditional stack | grafeo-memory |
-|---|---|---|
-| Infrastructure | Neo4j + Qdrant (Docker) | **Single .grafeo file** |
-| Install size | ~750MB (Docker images) | **~16MB** (uv add) |
-| Offline/edge | Requires servers | **Yes** |
-| Graph + vector | Separate services | **Unified engine** |
-| LLM providers | Varies | **pydantic-ai** (OpenAI, Anthropic, Mistral, Groq, Google) |
-| Embeddings | External API required | **Protocol-based** (any provider) |
+- **One file**: memories, embeddings, entities and history live in a single `.grafeo` file, with no server or
+  container to run.
+- **Small install**: about 16 MB with `uv add`.
+- **Offline and at the edge**: the database runs inside the process; only model calls leave the device, and none
+  do with a local model through Ollama.
+- **Graph and vector in one engine**: search combines vector similarity with graph context.
+- **Any LLM**: pydantic-ai model strings (Mistral, Ollama, Anthropic, OpenAI and more).
+- **Any embedder**: Mistral and OpenAI are built in; others plug in through the `EmbeddingClient` protocol.
 
 ## API Reference
 
 ### `MemoryManager`
 
-- `MemoryManager(model, config=None, *, embedder)`: create memory manager. `model` is a pydantic-ai model string (e.g. `"openai:gpt-4o-mini"`)
+- `MemoryManager(model, config=None, *, embedder)`: create memory manager. `model` is a pydantic-ai model string (e.g. `"mistral:mistral-small-latest"`)
 - `.add(messages, user_id=None, session_id=None, metadata=None, *, infer=True, importance=1.0, memory_type="semantic", speaker=None, source="chat")` → `AddResult` (list of `MemoryEvent`)
 - `.for_user(user_id)` → a view bound to one user (see [Multi-User Isolation](#multi-user-isolation))
 - `.start_session(session_id=None, *, anonymous=False)` → `str`; `.assemble(query, session_id, budget)` → `ContextBlock`; `.end_session(session_id)` → `AddResult` (see [Sessions](#sessions))
@@ -619,10 +610,10 @@ for result in memory.search("query"):
 grafeo-memory is part of the GrafeoDB ecosystem:
 
 - **[grafeo](https://github.com/GrafeoDB/grafeo)**: Core graph database engine (Rust)
+- **grafeo-memory-mcp** (built-in): MCP server for the memory API (`uv add "grafeo-memory[mcp,mistral]"`)
+- **[grafeo-mcp](https://github.com/GrafeoDB/grafeo-mcp)**: MCP server for raw GrafeoDB access
 - **[grafeo-langchain](https://github.com/GrafeoDB/grafeo-langchain)**: LangChain integration
 - **[grafeo-llamaindex](https://github.com/GrafeoDB/grafeo-llamaindex)**: LlamaIndex integration
-- **[grafeo-mcp](https://github.com/GrafeoDB/grafeo-mcp)**: MCP server for raw GrafeoDB access
-- **grafeo-memory-mcp** (built-in): MCP server for the memory API (`uv add grafeo-memory[mcp,openai]`)
 
 All packages share the same database file. Build memories with grafeo-memory, query them with grafeo-langchain, expose them via MCP.
 

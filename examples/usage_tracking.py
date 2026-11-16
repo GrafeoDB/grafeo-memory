@@ -5,13 +5,13 @@ grafeo-memory tracks LLM usage across all operations:
 2. Aggregated usage on results via the .usage attribute
 
 Requires:
-    uv add grafeo-memory[openai]
-    OPENAI_API_KEY environment variable
+    uv add "grafeo-memory[mistral]"
+    MISTRAL_API_KEY environment variable
 """
 
-from openai import OpenAI
+from mistralai.client import Mistral
 
-from grafeo_memory import MemoryConfig, MemoryManager, OpenAIEmbedder
+from grafeo_memory import MemoryConfig, MemoryManager, MistralEmbedder
 
 
 def main():
@@ -19,21 +19,21 @@ def main():
         tokens = (usage.input_tokens or 0) + (usage.output_tokens or 0)
         print(f"  [{operation}] {tokens} tokens ({usage.input_tokens} in / {usage.output_tokens} out)")
 
-    embedder = OpenAIEmbedder(OpenAI())
-    config = MemoryConfig(user_id="alice", usage_callback=on_usage)
+    embedder = MistralEmbedder(Mistral())
+    config = MemoryConfig(user_id="russ", usage_callback=on_usage)
 
-    with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
-        # --- Add (fires extract_facts + extract_entities callbacks) ---
+    with MemoryManager("mistral:mistral-small-latest", config, embedder=embedder) as memory:
+        # --- Add (fires the extraction and reconciliation callbacks) ---
         print("Adding memory (watching LLM calls):")
-        result = memory.add("Alice is a data scientist at Acme Corp who loves hiking")
+        result = memory.add("I led Pied Piper's Series A, and I have three commas: I'm a billionaire", speaker="Russ")
         print(
             f"  Total: {result.usage.input_tokens} in, {result.usage.output_tokens} out, "
             f"{result.usage.requests} requests\n"
         )
 
-        # --- Search (fires extract_entities for graph search) ---
+        # --- Search (no model call by default; RetrievalConfig.query_entities="llm" adds one) ---
         print("Searching (watching LLM calls):")
-        search = memory.search("What does Alice do?")
+        search = memory.search("How rich is Russ?")
         print(
             f"  Total: {search.usage.input_tokens} in, {search.usage.output_tokens} out, "
             f"{search.usage.requests} requests"

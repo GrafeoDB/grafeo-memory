@@ -9,19 +9,19 @@ When enabled, search results are ranked by a composite score:
 - importance: user-set priority (0.0 - 1.0)
 
 Requires:
-    uv add grafeo-memory[openai]
-    OPENAI_API_KEY environment variable
+    uv add "grafeo-memory[mistral]"
+    MISTRAL_API_KEY environment variable
 """
 
-from openai import OpenAI
+from mistralai.client import Mistral
 
-from grafeo_memory import MemoryConfig, MemoryManager, OpenAIEmbedder
+from grafeo_memory import MemoryConfig, MemoryManager, MistralEmbedder
 
 
 def main():
-    embedder = OpenAIEmbedder(OpenAI())
+    embedder = MistralEmbedder(Mistral())
     config = MemoryConfig(
-        user_id="alice",
+        user_id="erlich",
         enable_importance=True,
         weight_similarity=0.4,
         weight_recency=0.3,
@@ -29,11 +29,11 @@ def main():
         weight_importance=0.15,
     )
 
-    with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
+    with MemoryManager("mistral:mistral-small-latest", config, embedder=embedder) as memory:
         # --- Add memories (raw mode for predictable demo) ---
-        r1 = memory.add("Alice's phone number is 555-0100", infer=False)
-        r2 = memory.add("Alice prefers window seats on flights", infer=False)
-        r3 = memory.add("Alice's passport expires in 2027", infer=False)
+        r1 = memory.add("Erlich owns ten percent of Pied Piper through his incubator", infer=False)
+        r2 = memory.add("Erlich's catchphrase is Aviato", infer=False)
+        r3 = memory.add("Erlich is flying to Tibet next week", infer=False)
 
         # --- Set importance levels ---
         memory.set_importance(r1[0].memory_id, 0.9)  # high
@@ -46,8 +46,7 @@ def main():
 
         # --- Search, importance affects ranking ---
         print("\nSearch results (importance-weighted):")
-        results = memory.search("Alice travel information")
-        for r in results:
+        for r in memory.search("Erlich travel plans"):
             imp = r.importance if r.importance is not None else "n/a"
             print(f"  [{r.score:.3f}] (imp={imp}) {r.text}")
 

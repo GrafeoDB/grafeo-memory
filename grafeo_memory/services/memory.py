@@ -2694,6 +2694,8 @@ class _MemoryCore:
                 node_type = props.get("memory_type", "semantic")
                 if node_type != mtype_val:
                     continue
+            importance = props.get("importance")
+            access_count = props.get("access_count")
             memories.append(
                 SearchResult(
                     memory_id=str(node_id),
@@ -2703,6 +2705,8 @@ class _MemoryCore:
                     metadata=_parse_metadata(props.get("metadata")),
                     actor_id=props.get("actor_id"),
                     role=props.get("role"),
+                    importance=float(importance) if importance is not None else None,
+                    access_count=int(access_count) if access_count is not None else None,
                     memory_type=props.get("memory_type", "semantic"),
                     created_at=props.get("created_at"),
                     expired_at=props.get("expired_at"),

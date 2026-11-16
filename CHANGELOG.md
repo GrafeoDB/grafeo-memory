@@ -2,6 +2,27 @@
 
 All notable changes to grafeo-memory, an embedded AI memory layer on GrafeoDB.
 
+## [0.4.1] - 2026-11-16
+
+Fixes and examples release: reconciliation no longer overwrites a memory that only shares a subject with the new fact, the sync API works inside a running event loop, and the README and example scripts follow the Pied Piper story with Mistral first. Before upgrading: the reconciliation prompt changes (`PROMPTS_VERSION` 4), so reconciliation results change and 0.4.0 benchmark runs are not comparable; the grafeo pin stays `>=0.6.2,<0.7`.
+
+### Changed
+
+- **README examples follow Pied Piper**: the quick start, users, sessions, history and CLI examples use Richard, Gilfoyle, Dinesh and Russ. The quick start shows an UPDATE as Pied Piper moves from the Hacker Hostel to Mountain View.
+- **Mistral leads the README**: the quick start, provider examples, embedder table and MCP configs show Mistral first, then a local model through Ollama, Anthropic and OpenAI; the Groq and Google examples are gone. The MCP server's default model stays `openai:gpt-4o-mini`.
+- **The example scripts run on Mistral and follow Pied Piper**: all nine scripts in `examples/` use `mistral-small-latest` and `MistralEmbedder`, with Richard, Jared, Jian-Yang, Erlich, Gilfoyle, Russ and Monica. The vision example sends a Pied Piper whiteboard inline as a data URL, since Mistral could not fetch the old Wikimedia URL.
+- **Install commands quote extras**: `uv add "grafeo-memory[mistral]"`, so zsh does not read the brackets as a glob.
+- **README links are absolute**: the licence, docs and changelog links now work on the PyPI page.
+
+### Fixed
+
+- **Reconciliation keeps memories that a new fact does not change**: an UPDATE could replace a memory that only shared its subject, so "Gilfoyle built PiperCoin" overwrote "Gilfoyle built Anton". The reconciliation prompt now updates only when the same detail changes or a fact ends the old one; on eight test cases with `mistral-small-latest` it decides 30 of 32 runs right, where the 0.4.0 prompt decided between 13 of 24 and 28 of 32.
+- **The sync API works inside a running event loop**: a `MemoryManager` called from a Jupyter cell or an async app failed on its second model call with "Event loop is closed" or "bound to a different event loop". Every sync call now runs on one persistent event loop, so pooled connections stay valid.
+- **`get_all()` reports importance and access count**: it returned `importance=None` even after `set_importance()`.
+- **The model table matches 0.4**: `mistral-small-latest` extracts in one combined call per `add()`; the README said it fell back to three.
+- **The session example says when turns are stored**: binding a session to a user stores its turns, and `end_session()` stores them only with `tiers.working.defer_extraction`.
+- **The rollback from grafeo 0.6 pins both packages**: `uv add "grafeo-memory<0.3" "grafeo<0.6"`, since grafeo-memory 0.2.2 alone resolves grafeo 0.6.
+
 ## [0.4.0] - 2026-11-14
 
 Identity and tenancy release: the user_id never reaches a prompt, `for_user()` scopes a manager to one user, and sessions can be anonymous. Before upgrading: Python 3.13 is the minimum, extraction results change (0.3.0 benchmark runs are not comparable), search makes no model call by default (`query_entities="llm"` restores it), and graph metrics are computed by `compile()`.

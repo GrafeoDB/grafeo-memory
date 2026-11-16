@@ -8,41 +8,39 @@ Each type uses its own extraction prompt and reconciliation scope,
 so procedural and semantic memories never interfere with each other.
 
 Requires:
-    uv add grafeo-memory[openai]
-    OPENAI_API_KEY environment variable
+    uv add "grafeo-memory[mistral]"
+    MISTRAL_API_KEY environment variable
 """
 
-from openai import OpenAI
+from mistralai.client import Mistral
 
-from grafeo_memory import MemoryConfig, MemoryManager, OpenAIEmbedder
+from grafeo_memory import MemoryConfig, MemoryManager, MistralEmbedder
 
 
 def main():
-    embedder = OpenAIEmbedder(OpenAI())
-    config = MemoryConfig(user_id="developer")
+    embedder = MistralEmbedder(Mistral())
+    config = MemoryConfig(user_id="richard")
 
-    with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
+    with MemoryManager("mistral:mistral-small-latest", config, embedder=embedder) as memory:
         # --- Add procedural memories (instructions / preferences) ---
         print("Adding procedural memories...")
-        memory.add("Always use type hints in Python code", memory_type="procedural")
-        memory.add("Prefer pytest over unittest for testing", memory_type="procedural")
-        memory.add("Use Google-style docstrings", memory_type="procedural")
+        memory.add("Always indent with tabs, never spaces", memory_type="procedural")
+        memory.add("Never let Son of Anton push to production without a review", memory_type="procedural")
+        memory.add("Write tests for every change to the compression code", memory_type="procedural")
 
         # --- Add semantic memories (facts) ---
         print("Adding semantic memories...")
-        memory.add("The project uses Python 3.12 and ruff for linting")
-        memory.add("The main database is PostgreSQL 16")
+        memory.add("Pied Piper's compression engine uses middle-out and scores 5.2 on the Weissman scale")
+        memory.add("Pied Piper's servers run on Anton, which Gilfoyle built")
 
         # --- Search procedural only ---
-        print("\nSearching procedural memories for 'testing':")
-        results = memory.search("testing", memory_type="procedural")
-        for r in results:
+        print("\nSearching procedural memories for 'code style':")
+        for r in memory.search("code style", memory_type="procedural"):
             print(f"  [{r.score:.2f}] {r.text}")
 
         # --- Search semantic only ---
-        print("\nSearching semantic memories for 'database':")
-        results = memory.search("database", memory_type="semantic")
-        for r in results:
+        print("\nSearching semantic memories for 'servers':")
+        for r in memory.search("servers", memory_type="semantic"):
             print(f"  [{r.score:.2f}] {r.text}")
 
         # --- List all by type ---
